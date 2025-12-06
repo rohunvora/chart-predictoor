@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Chart Predictoor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Nickname Modal -->
+  <div id="nickname-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-icon">🎯</div>
+      <h2>Welcome to Chart Predictoor</h2>
+      <p>Predict where Bitcoin goes next. Compete on the leaderboard.</p>
+      <input type="text" id="nickname-input" placeholder="Enter your nickname" maxlength="15" autocomplete="off">
+      <button id="nickname-submit" class="btn-primary">Start Predicting</button>
+    </div>
+  </div>
+
+  <!-- Main App -->
+  <div id="app" class="hidden">
+    <!-- Header with price -->
+    <header class="price-header">
+      <div class="price-info">
+        <span class="asset-name">Bitcoin</span>
+        <div class="price-row">
+          <span id="current-price" class="current-price">$0.00</span>
+          <span id="price-change" class="price-change">+0.00%</span>
+        </div>
+      </div>
+      <div class="user-badge">
+        <span id="user-nickname">You</span>
+        <div class="avatar" id="user-avatar">Y</div>
+      </div>
+    </header>
+
+    <!-- Chart Container -->
+    <div class="chart-section">
+      <div id="chart-container">
+        <canvas id="drawing-canvas"></canvas>
+      </div>
+      
+      <!-- Drawing Controls -->
+      <div id="drawing-controls" class="drawing-controls hidden">
+        <div class="drawing-hint">
+          <span class="hint-icon">✏️</span>
+          <span>Draw your prediction for the next 60 seconds</span>
+        </div>
+        <div class="drawing-actions">
+          <button id="clear-drawing" class="btn-secondary">Clear</button>
+          <button id="submit-prediction" class="btn-primary">Submit Prediction</button>
+        </div>
+      </div>
+      
+      <!-- Predict Button -->
+      <button id="predict-btn" class="predict-btn">
+        <span class="predict-icon">📈</span>
+        <span>Make a Prediction</span>
+      </button>
+    </div>
+
+    <!-- Leaderboard -->
+    <section class="leaderboard-section">
+      <div class="leaderboard-header">
+        <h2 class="leaderboard-title">LEADERBOARD</h2>
+        <div class="live-badge">
+          <span class="live-dot"></span>
+          LIVE
+        </div>
+      </div>
+      
+      <div id="leaderboard" class="leaderboard">
+        <!-- Leaderboard items will be inserted here -->
+      </div>
+    </section>
+
+    <!-- Active Prediction Banner -->
+    <div id="active-prediction" class="active-prediction hidden">
+      <div class="prediction-info">
+        <span class="prediction-label">Your Prediction</span>
+        <span id="prediction-accuracy" class="prediction-accuracy">0.0%</span>
+      </div>
+      <div class="prediction-timer">
+        <span id="prediction-countdown">60s</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
+
+

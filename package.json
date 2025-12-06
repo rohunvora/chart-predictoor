@@ -1,0 +1,13 @@
+{
+  "name": "chart-predictoor",
+  "version": "1.0.0",
+  "description": "Predict Bitcoin price movements and compete on the leaderboard",
+  "scripts": {
+    "dev": "npx serve public -l 3000",
+    "build": "echo 'Static site - no build needed'"
+  },
+  "keywords": ["bitcoin", "prediction", "game", "trading"],
+  "license": "MIT"
+}
+
+
