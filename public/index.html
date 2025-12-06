@@ -2,8 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Predictoor | Where will BTC close?</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#08080a">
+  <title>Predictoor | Predict BTC Price</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -16,6 +19,10 @@
       <div class="brand">
         <span class="brand-icon">📈</span>
         <span class="brand-name">Predictoor</span>
+        <div class="streak-badge" id="streak-badge">
+          <span class="streak-icon">🔥</span>
+          <span class="streak-count" id="streak-count">0</span>
+        </div>
       </div>
       <div class="price-display">
         <span class="price-label">BTC/USD</span>
@@ -24,28 +31,35 @@
       </div>
     </header>
 
-    <!-- Main Layout: Fixed grid -->
+    <!-- Main Layout -->
     <main class="main">
       <!-- Left: Chart Area -->
       <div class="chart-area">
-        <!-- Timer Bar -->
+        <!-- Timer Bar - Simplified -->
         <div class="timer-bar">
           <div class="timer-left">
-            <span class="timer-value" id="round-timer">60</span>
-            <span class="timer-unit">sec</span>
+            <span class="timer-label">Round ends</span>
+            <span class="timer-target" id="round-target">--:--</span>
           </div>
-          <div class="timer-progress">
-            <div class="progress-track">
-              <div class="progress-fill" id="progress-fill"></div>
-            </div>
+          <div class="timer-center">
+            <span class="timer-value" id="round-timer">60</span>
+            <span class="timer-unit">s</span>
           </div>
           <div class="timer-right">
             <span class="player-count" id="player-count">0</span>
-            <span class="player-label">players</span>
+            <span class="player-label">playing</span>
           </div>
         </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
         
-        <!-- Chart Container - FIXED SIZE -->
+        <!-- Chart Legend -->
+        <div class="chart-legend" id="chart-legend">
+          <span class="legend-item"><span class="legend-dot" style="background:#f7931a"></span>BTC Price</span>
+        </div>
+        
+        <!-- Chart Container -->
         <div class="chart-container">
           <div id="chart-wrapper"></div>
         </div>
@@ -53,9 +67,12 @@
 
       <!-- Right: Sidebar -->
       <aside class="sidebar">
-        <!-- Your Prediction -->
+        <!-- Prediction Input -->
         <div class="sidebar-section prediction-section">
-          <h2 class="section-title">Your Prediction</h2>
+          <div class="prediction-prompt">
+            <span class="prompt-main">Predict the price at round end</span>
+            <span class="prompt-sub">Closest prediction wins 🏆</span>
+          </div>
           
           <div id="input-mode">
             <div class="price-input-wrap">
@@ -70,22 +87,27 @@
               >
             </div>
             <button id="btn-submit" class="btn-submit">Lock In</button>
+            <p class="input-hint">⏱️ <span id="prompt-time">60</span>s remaining to predict</p>
           </div>
           
           <div id="locked-mode" class="hidden">
-            <div class="locked-price">
-              <span class="locked-label">Your target:</span>
-              <span class="locked-value" id="locked-value">$89,650</span>
+            <div class="your-prediction-locked">
+              <span class="locked-label">Your prediction</span>
+              <span class="locked-price-value" id="locked-price-value">$89,650</span>
             </div>
-            <div class="locked-status">✓ Locked in</div>
+            <div class="live-rank-display" id="locked-value">
+              <div class="your-rank">#--</div>
+              <div class="your-distance">Calculating...</div>
+            </div>
+            <div class="locked-status">📊 Live rank • Updates as price moves</div>
           </div>
         </div>
 
         <!-- Live Standings -->
         <div class="sidebar-section standings-section">
           <h2 class="section-title">
-            <span>Live Standings</span>
-            <span class="standings-subtitle">closest to price wins</span>
+            <span>🏆 Live Rankings</span>
+            <span class="standings-subtitle">Closest to current price</span>
           </h2>
           <div class="standings-list" id="standings-list">
             <!-- Populated by JS -->
@@ -105,14 +127,15 @@
           </div>
           <div class="results-prices">
             <div class="result-item">
-              <span>Predicted:</span>
+              <span>Winning prediction</span>
               <span id="winner-price">$89,650</span>
             </div>
             <div class="result-item">
-              <span>Actual:</span>
+              <span>Actual close</span>
               <span id="final-price">$89,652</span>
             </div>
           </div>
+          <div class="your-result hidden" id="your-result"></div>
           <div class="next-round">Next round in 5s...</div>
         </div>
       </aside>

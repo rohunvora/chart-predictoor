@@ -1,8 +1,9 @@
-// Predictoor - Clean Layout, Minimal Y-Axis Labels
+// Predictoor - Improved UX with clear labels and auto-scaling
 (function() {
   'use strict';
 
   const ROUND_DURATION = 60;
+  const PREDICTION_CUTOFF = 5;
 
   const state = {
     chart: null,
@@ -14,25 +15,36 @@
     displayPrice: 0,
     targetPrice: 0,
     priceHistory: [],
-    priceBuffer: [],
     
     // Round
     roundStartTime: 0,
     roundEndTime: 0,
     roundStartPrice: 0,
     roundStatus: 'active',
+    roundNumber: 0,
     
     // Predictions
     myPrediction: null,
-    predictions: [], // { id, nickname, price, color, line }
+    predictions: [],
     
-    // Only these get Y-axis labels
+    // Live rank tracking
+    myRank: null,
+    lastRank: null,
+    myDistance: null,
+    
+    // Price lines
     myPriceLine: null,
     leaderPriceLine: null,
     currentLeaderId: null,
     
+    // Stats
+    streak: 0,
+    totalWins: 0,
+    totalPlayed: 0,
+    
     // Timing
     lastChartUpdate: 0,
+    userHasInteracted: false,
   };
 
   const DOM = {};
@@ -41,21 +53,19 @@
   // INIT
   // ==========================================
   function init() {
+    loadStats();
     cacheDom();
     initChart();
     setupEventListeners();
     
-    // Load data FIRST, then start everything else
     loadHistoricalData().then(() => {
       console.log('Data loaded, price:', state.currentPrice);
       startRound();
       connectWebSocket();
       setTimeout(addSimulatedPlayers, 500);
-      // Start animation loop AFTER we have data
       requestAnimationFrame(animationLoop);
     }).catch(err => {
       console.error('Failed to load data:', err);
-      // Fallback: start anyway with default price
       state.currentPrice = 90000;
       state.displayPrice = 90000;
       state.targetPrice = 90000;
@@ -71,6 +81,7 @@
     DOM.price = document.getElementById('current-price');
     DOM.change = document.getElementById('price-change');
     DOM.timer = document.getElementById('round-timer');
+    DOM.timerTarget = document.getElementById('round-target');
     DOM.progress = document.getElementById('progress-fill');
     DOM.playerCount = document.getElementById('player-count');
     
@@ -79,6 +90,7 @@
     DOM.priceInput = document.getElementById('price-input');
     DOM.btnSubmit = document.getElementById('btn-submit');
     DOM.lockedValue = document.getElementById('locked-value');
+    DOM.promptTime = document.getElementById('prompt-time');
     
     DOM.standingsList = document.getElementById('standings-list');
     
@@ -87,12 +99,40 @@
     DOM.winnerPrice = document.getElementById('winner-price');
     DOM.finalPrice = document.getElementById('final-price');
     DOM.winnerAccuracy = document.getElementById('winner-accuracy');
+    DOM.yourResult = document.getElementById('your-result');
     
     DOM.confetti = document.getElementById('confetti');
+    DOM.streak = document.getElementById('streak-count');
+    DOM.legend = document.getElementById('chart-legend');
   }
 
   // ==========================================
-  // CHART - Proper sizing
+  // STATS (localStorage)
+  // ==========================================
+  function loadStats() {
+    try {
+      const saved = localStorage.getItem('predictoor_stats');
+      if (saved) {
+        const data = JSON.parse(saved);
+        state.streak = data.streak || 0;
+        state.totalWins = data.totalWins || 0;
+        state.totalPlayed = data.totalPlayed || 0;
+      }
+    } catch (e) {}
+  }
+  
+  function saveStats() {
+    try {
+      localStorage.setItem('predictoor_stats', JSON.stringify({
+        streak: state.streak,
+        totalWins: state.totalWins,
+        totalPlayed: state.totalPlayed,
+      }));
+    } catch (e) {}
+  }
+
+  // ==========================================
+  // CHART
   // ==========================================
   function initChart() {
     const container = DOM.chartWrapper;
@@ -116,19 +156,32 @@
         timeVisible: true,
         secondsVisible: true,
         rightOffset: 5,
-        barSpacing: 4,
+        barSpacing: 6,
+        fixLeftEdge: false,
+        fixRightEdge: false,
       },
       rightPriceScale: {
         borderVisible: false,
-        scaleMargins: { top: 0.1, bottom: 0.1 },
+        scaleMargins: { top: 0.15, bottom: 0.15 },
+        autoScale: true,
+        alignLabels: true,
       },
       crosshair: {
         mode: LightweightCharts.CrosshairMode.Normal,
         vertLine: { color: 'rgba(247,147,26,0.3)', style: 2, labelBackgroundColor: '#f7931a' },
         horzLine: { color: 'rgba(247,147,26,0.3)', style: 2, labelBackgroundColor: '#f7931a' },
       },
-      handleScroll: false,
-      handleScale: false,
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false,
+      },
+      handleScale: {
+        axisPressedMouseMove: { time: true, price: true },
+        mouseWheel: true,
+        pinch: true,
+      },
     });
 
     state.series = state.chart.addLineSeries({
@@ -138,7 +191,7 @@
       lastValueVisible: true,
     });
 
-    // Resize observer for responsive sizing
+    // Resize observer
     const resizeObserver = new ResizeObserver(entries => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
@@ -146,6 +199,10 @@
       }
     });
     resizeObserver.observe(container);
+    
+    // Track user interaction (for auto-scroll behavior)
+    container.addEventListener('mousedown', () => { state.userHasInteracted = true; });
+    container.addEventListener('touchstart', () => { state.userHasInteracted = true; });
     
     // Click to set price
     container.style.cursor = 'crosshair';
@@ -163,12 +220,24 @@
       DOM.priceInput.value = Math.round(price).toString();
     }
   }
+  
+  // Fit chart to show recent data nicely
+  function fitChartToData() {
+    if (!state.chart || state.priceHistory.length < 2) return;
+    
+    // Show last 3 minutes of data + some future space
+    const now = Math.floor(Date.now() / 1000);
+    const from = now - 180; // 3 minutes ago
+    const to = now + 30; // 30 seconds into future
+    
+    state.chart.timeScale().setVisibleRange({ from, to });
+  }
 
   // ==========================================
   // DATA
   // ==========================================
   async function loadHistoricalData() {
-    const response = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=60');
+    const response = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=30');
     if (!response.ok) throw new Error('API error: ' + response.status);
     
     const klines = await response.json();
@@ -184,7 +253,6 @@
       const close = parseFloat(k[4]);
       const baseTime = Math.floor(k[0] / 1000);
       
-      // Interpolate for smoother chart (6 points per minute)
       for (let j = 0; j < 6; j++) {
         const t = baseTime + j * 10;
         if (t > now) break;
@@ -203,7 +271,6 @@
       }
     }
     
-    // Dedupe and sort
     const seen = new Set();
     const uniqueData = data.filter(d => {
       if (seen.has(d.time)) return false;
@@ -222,33 +289,33 @@
     } else {
       throw new Error('No valid data points');
     }
+    
+    // Initial fit
+    setTimeout(fitChartToData, 100);
   }
 
   function connectWebSocket() {
-    state.ws = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@trade');
+    state.ws = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@aggTrade');
+    
+    state.ws.onopen = () => console.log('WebSocket connected');
     
     state.ws.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data);
-        const price = parseFloat(data.p);
-        
-        state.priceBuffer.push(price);
-        if (state.priceBuffer.length > 8) state.priceBuffer.shift();
-        
-        state.targetPrice = state.priceBuffer.reduce((a, b) => a + b, 0) / state.priceBuffer.length;
+        state.targetPrice = parseFloat(data.p);
       } catch (err) {}
     };
     
-    state.ws.onclose = () => setTimeout(connectWebSocket, 2000);
+    state.ws.onerror = (err) => console.error('WS error:', err);
+    state.ws.onclose = () => setTimeout(connectWebSocket, 1000);
   }
 
   // ==========================================
   // ANIMATION LOOP
   // ==========================================
   function animationLoop(ts) {
-    // Smooth price lerp (only if we have valid prices)
     if (state.targetPrice > 0) {
-      state.displayPrice += (state.targetPrice - state.displayPrice) * 0.1;
+      state.displayPrice += (state.targetPrice - state.displayPrice) * 0.8;
       state.currentPrice = state.displayPrice;
     }
     
@@ -256,15 +323,14 @@
     updateChart(ts);
     updateTimer();
     updateStandings();
+    updateLegend();
     
     requestAnimationFrame(animationLoop);
   }
 
   function updateChart(ts) {
-    // Skip if no valid price yet
     if (!state.displayPrice || state.displayPrice <= 0) return;
-    // Throttle updates to 200ms
-    if (ts - state.lastChartUpdate < 200) return;
+    if (ts - state.lastChartUpdate < 50) return;
     state.lastChartUpdate = ts;
     
     const now = Math.floor(Date.now() / 1000);
@@ -291,26 +357,51 @@
   }
 
   // ==========================================
-  // PREDICTIONS - Minimal Y-axis labels
+  // LEGEND (Clear labels for chart lines)
+  // ==========================================
+  function updateLegend() {
+    if (!DOM.legend) return;
+    
+    const items = [];
+    
+    // Current price
+    items.push(`<span class="legend-item"><span class="legend-dot" style="background:#f7931a"></span>BTC Price</span>`);
+    
+    // Leader
+    if (state.currentLeaderId && state.predictions.length > 0) {
+      const leader = state.predictions.find(p => p.id === state.currentLeaderId);
+      if (leader) {
+        const label = leader.id === 'me' ? 'You (Leading!)' : `👑 ${leader.nickname}`;
+        items.push(`<span class="legend-item"><span class="legend-dot" style="background:${leader.color}"></span>${label}</span>`);
+      }
+    }
+    
+    // Your prediction (if not leader)
+    if (state.myPrediction && state.currentLeaderId !== 'me') {
+      items.push(`<span class="legend-item"><span class="legend-dot" style="background:#22c55e"></span>Your Prediction</span>`);
+    }
+    
+    DOM.legend.innerHTML = items.join('');
+  }
+
+  // ==========================================
+  // PREDICTIONS
   // ==========================================
   function addPrediction(pred) {
-    // Remove if exists
     removePrediction(pred.id);
     
-    // Ghost line - NO axis label (axisLabelVisible: false)
     const isMe = pred.id === 'me';
     pred.line = state.series.createPriceLine({
       price: pred.price,
-      color: hexToRgba(pred.color, isMe ? 0.6 : 0.15),
+      color: hexToRgba(pred.color, isMe ? 0.7 : 0.12),
       lineWidth: isMe ? 2 : 1,
-      lineStyle: isMe ? 0 : 2, // Solid for me, dashed for others
-      axisLabelVisible: false, // KEY: No label clutter!
+      lineStyle: isMe ? 0 : 2,
+      axisLabelVisible: false,
       title: '',
     });
     
     state.predictions.push(pred);
     
-    // If it's my prediction, add special labeled line
     if (isMe) {
       updateMyPriceLine(pred.price);
     }
@@ -345,7 +436,6 @@
     state.currentLeaderId = null;
   }
 
-  // Only YOUR prediction gets an axis label
   function updateMyPriceLine(price) {
     if (state.myPriceLine) {
       state.series.removePriceLine(state.myPriceLine);
@@ -356,22 +446,28 @@
       lineWidth: 2,
       lineStyle: 0,
       axisLabelVisible: true,
-      title: '→ YOU',
+      title: 'YOU',
     });
   }
 
-  // Only LEADER gets an axis label
   function updateLeaderPriceLine(pred) {
     if (state.leaderPriceLine) {
       state.series.removePriceLine(state.leaderPriceLine);
     }
+    
+    // Don't duplicate if leader is me
+    if (pred.id === 'me') {
+      state.currentLeaderId = 'me';
+      return;
+    }
+    
     state.leaderPriceLine = state.series.createPriceLine({
       price: pred.price,
-      color: pred.id === 'me' ? '#22c55e' : pred.color,
+      color: pred.color,
       lineWidth: 3,
       lineStyle: 0,
       axisLabelVisible: true,
-      title: '👑 ' + (pred.id === 'me' ? 'YOU' : pred.nickname),
+      title: '👑 ' + pred.nickname,
     });
     state.currentLeaderId = pred.id;
   }
@@ -384,24 +480,33 @@
   }
 
   // ==========================================
-  // STANDINGS - Sidebar list instead of Y-axis
+  // STANDINGS
   // ==========================================
   function updateStandings() {
     if (state.predictions.length === 0 || state.currentPrice <= 0) return;
     
-    // Sort by distance to current price
     const sorted = [...state.predictions].map(p => ({
       ...p,
       diff: Math.abs(p.price - state.currentPrice)
     })).sort((a, b) => a.diff - b.diff);
     
-    // Update leader line if changed
+    // Track my rank
+    const myIndex = sorted.findIndex(p => p.id === 'me');
+    if (myIndex !== -1) {
+      const newRank = myIndex + 1;
+      state.lastRank = state.myRank;
+      state.myRank = newRank;
+      state.myDistance = sorted[myIndex].diff;
+      updateMyRankDisplay();
+    }
+    
+    // Update leader
     const leader = sorted[0];
     if (leader && leader.id !== state.currentLeaderId) {
       updateLeaderPriceLine(leader);
     }
     
-    // Render standings list
+    // Render standings
     DOM.standingsList.innerHTML = sorted.slice(0, 10).map((p, i) => {
       const isLeader = i === 0;
       const isYou = p.id === 'me';
@@ -409,26 +514,62 @@
       if (isLeader) classes.push('is-leader');
       if (isYou) classes.push('is-you');
       
+      // Rank change indicator
+      let rankIndicator = '';
+      if (isYou && state.lastRank !== null && state.lastRank !== state.myRank) {
+        rankIndicator = state.myRank < state.lastRank 
+          ? '<span class="rank-up">▲</span>' 
+          : '<span class="rank-down">▼</span>';
+      }
+      
+      // Show predicted price AND distance
+      const direction = p.price > state.currentPrice ? '↑' : '↓';
+      
       return `
         <div class="${classes.join(' ')}">
           <span class="standing-rank">${isLeader ? '👑' : (i + 1)}</span>
           <span class="standing-color" style="background:${p.color}"></span>
-          <span class="standing-name">${isYou ? 'You' : p.nickname}</span>
-          <span class="standing-diff">$${p.diff.toFixed(0)}</span>
+          <span class="standing-name">${isYou ? 'YOU' : p.nickname}${rankIndicator}</span>
+          <span class="standing-price">$${p.price.toLocaleString()}</span>
+          <span class="standing-diff ${p.diff < 10 ? 'close' : ''}">${direction} $${p.diff.toFixed(0)}</span>
         </div>
       `;
     }).join('');
+  }
+  
+  function updateMyRankDisplay() {
+    if (!state.myPrediction || !DOM.lockedMode) return;
+    
+    const rankText = state.myRank === 1 ? '🏆 1st' : 
+                     state.myRank === 2 ? '🥈 2nd' : 
+                     state.myRank === 3 ? '🥉 3rd' : 
+                     `#${state.myRank}`;
+    
+    const distText = `$${state.myDistance?.toFixed(0) || '0'} away from current`;
+    
+    if (DOM.lockedValue) {
+      DOM.lockedValue.innerHTML = `
+        <div class="your-rank">${rankText}</div>
+        <div class="your-distance">${distText}</div>
+      `;
+    }
   }
 
   // ==========================================
   // ROUND
   // ==========================================
   function startRound() {
-    state.roundStartTime = Date.now();
-    state.roundEndTime = state.roundStartTime + (ROUND_DURATION * 1000);
+    const now = Date.now();
+    const msUntilNextMinute = 60000 - (now % 60000);
+    
+    state.roundStartTime = now;
+    state.roundEndTime = now + msUntilNextMinute;
     state.roundStatus = 'active';
     state.roundStartPrice = state.currentPrice || state.displayPrice;
     state.myPrediction = null;
+    state.myRank = null;
+    state.lastRank = null;
+    state.roundNumber++;
     
     // Reset UI
     DOM.inputMode?.classList.remove('hidden');
@@ -444,7 +585,21 @@
       DOM.btnSubmit.disabled = false;
     }
     
-    setTimeout(endRound, ROUND_DURATION * 1000);
+    // Update streak display
+    if (DOM.streak) {
+      DOM.streak.textContent = state.streak;
+      DOM.streak.parentElement.classList.toggle('has-streak', state.streak > 0);
+    }
+    
+    setTimeout(endRound, msUntilNextMinute);
+    
+    const targetDate = new Date(state.roundEndTime);
+    const targetTimeStr = targetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (DOM.timerTarget) DOM.timerTarget.textContent = targetTimeStr;
+    
+    // Reset user interaction flag and fit chart
+    state.userHasInteracted = false;
+    setTimeout(fitChartToData, 100);
   }
 
   function endRound() {
@@ -462,22 +617,49 @@
       }
     }
     
+    // Update stats
+    if (state.myPrediction) {
+      state.totalPlayed++;
+      
+      if (winner && winner.id === 'me') {
+        state.totalWins++;
+        state.streak++;
+      } else {
+        state.streak = 0;
+      }
+      saveStats();
+    }
+    
     if (winner) {
       const accuracy = Math.max(0, 100 - (minDiff / finalPrice * 100)).toFixed(2);
+      const isMe = winner.id === 'me';
       
-      DOM.winnerName.textContent = winner.id === 'me' ? 'You!' : winner.nickname;
+      DOM.winnerName.textContent = isMe ? 'You won! 🎉' : winner.nickname;
       DOM.winnerName.style.color = winner.color;
       DOM.winnerPrice.textContent = formatPrice(winner.price);
       DOM.finalPrice.textContent = formatPrice(finalPrice);
-      DOM.winnerAccuracy.textContent = accuracy + '%';
+      DOM.winnerAccuracy.textContent = accuracy + '% accuracy';
+      
+      // Show your result if you played
+      if (DOM.yourResult && state.myPrediction) {
+        if (isMe) {
+          DOM.yourResult.innerHTML = `<span class="win-message">🏆 You won! Streak: ${state.streak}</span>`;
+        } else {
+          const myDiff = Math.abs(state.myPrediction.price - finalPrice);
+          const myRank = state.predictions
+            .map(p => Math.abs(p.price - finalPrice))
+            .sort((a, b) => a - b)
+            .indexOf(myDiff) + 1;
+          DOM.yourResult.innerHTML = `You placed #${myRank} ($${myDiff.toFixed(0)} off)`;
+        }
+        DOM.yourResult.classList.remove('hidden');
+      }
       
       DOM.inputMode?.classList.add('hidden');
       DOM.lockedMode?.classList.add('hidden');
       DOM.resultsSection?.classList.remove('hidden');
       
-      if (winner.id === 'me') {
-        triggerConfetti();
-      }
+      if (isMe) triggerConfetti();
     }
     
     setTimeout(() => {
@@ -488,9 +670,12 @@
   }
 
   function updateTimer() {
-    const remaining = Math.max(0, Math.ceil((state.roundEndTime - Date.now()) / 1000));
-    const elapsed = Date.now() - state.roundStartTime;
-    const progress = Math.min(100, (elapsed / (ROUND_DURATION * 1000)) * 100);
+    const now = Date.now();
+    const remaining = Math.max(0, Math.ceil((state.roundEndTime - now) / 1000));
+    const totalDuration = state.roundEndTime - state.roundStartTime;
+    const elapsed = now - state.roundStartTime;
+    const progress = Math.min(100, (elapsed / totalDuration) * 100);
+    const isLocked = remaining <= PREDICTION_CUTOFF;
     
     if (DOM.timer) {
       DOM.timer.textContent = remaining;
@@ -498,10 +683,24 @@
       DOM.timer.classList.toggle('critical', remaining <= 5);
     }
     
+    if (DOM.promptTime) {
+      DOM.promptTime.textContent = remaining;
+    }
+    
     if (DOM.progress) {
       DOM.progress.style.width = progress + '%';
       DOM.progress.classList.toggle('urgent', remaining <= 15 && remaining > 5);
       DOM.progress.classList.toggle('critical', remaining <= 5);
+    }
+    
+    if (DOM.btnSubmit && !state.myPrediction) {
+      if (isLocked) {
+        DOM.btnSubmit.disabled = true;
+        DOM.btnSubmit.textContent = 'Too Late!';
+      } else {
+        DOM.btnSubmit.disabled = false;
+        DOM.btnSubmit.textContent = 'Lock In';
+      }
     }
   }
 
@@ -531,14 +730,13 @@
       { name: 'CZ_Fan', color: '#fbbf24' },
       { name: 'VitalikJr', color: '#38bdf8' },
       { name: 'GigaChad', color: '#c084fc' },
-      { name: 'NFA_Andy', color: '#4ade80' },
     ];
     
     players.forEach((p, i) => {
       setTimeout(() => {
         if (state.roundStatus !== 'active') return;
         
-        const variance = price * 0.001;
+        const variance = price * 0.0008;
         const offset = (Math.random() - 0.5) * 2 * variance;
         
         addPrediction({
@@ -547,7 +745,7 @@
           price: Math.round(price + offset),
           color: p.color,
         });
-      }, i * 100);
+      }, i * 80);
     });
   }
 
@@ -569,9 +767,12 @@
       }
     });
   }
-
+  
   function submitPrediction() {
     if (state.roundStatus !== 'active') return;
+    
+    const remaining = (state.roundEndTime - Date.now()) / 1000;
+    if (remaining < PREDICTION_CUTOFF) return;
     
     const price = parseFloat(DOM.priceInput?.value);
     if (isNaN(price) || price <= 0) return;
@@ -589,10 +790,11 @@
     
     addPrediction(state.myPrediction);
     
-    // Switch to locked mode
     DOM.inputMode?.classList.add('hidden');
     DOM.lockedMode?.classList.remove('hidden');
-    DOM.lockedValue.textContent = formatPrice(price);
+    
+    const lockedPriceEl = document.getElementById('locked-price-value');
+    if (lockedPriceEl) lockedPriceEl.textContent = formatPrice(price);
   }
 
   // ==========================================

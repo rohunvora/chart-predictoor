@@ -1,4 +1,4 @@
-/* Predictoor - Clean Layout with Explicit Sizing */
+/* Predictoor - Improved UX */
 
 :root {
   --bg-dark: #08080a;
@@ -20,10 +20,9 @@
   --font-main: 'Space Grotesk', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
   
-  /* EXPLICIT SIZES */
   --header-height: 56px;
   --timer-height: 48px;
-  --sidebar-width: 300px;
+  --sidebar-width: 320px;
 }
 
 /* Reset */
@@ -46,7 +45,7 @@ body {
 }
 
 /* ==========================================
-   LAYOUT - Explicit pixel values
+   LAYOUT
    ========================================== */
 
 #app {
@@ -71,13 +70,13 @@ body {
 .main {
   display: flex;
   flex: 1;
-  min-height: 0; /* Critical for flex children to shrink */
+  min-height: 0;
   overflow: hidden;
 }
 
 .chart-area {
   flex: 1;
-  min-width: 0; /* Critical for flex children to shrink */
+  min-width: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg-surface);
@@ -92,13 +91,6 @@ body {
   background: var(--bg-elevated);
   border-left: 1px solid var(--border);
   overflow-y: auto;
-}
-
-/* Mobile: hide sidebar, show bottom sheet later */
-@media (max-width: 768px) {
-  .sidebar {
-    display: none;
-  }
 }
 
 /* ==========================================
@@ -118,6 +110,31 @@ body {
 .brand-name {
   font-size: 18px;
   font-weight: 700;
+}
+
+.streak-badge {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  background: linear-gradient(135deg, #f7931a, #f59e0b);
+  padding: 4px 10px;
+  border-radius: 20px;
+  margin-left: 12px;
+}
+
+.streak-badge.has-streak {
+  display: flex;
+}
+
+.streak-icon {
+  font-size: 14px;
+}
+
+.streak-count {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: #000;
 }
 
 .price-display {
@@ -160,27 +177,44 @@ body {
    ========================================== */
 
 .timer-bar {
-  height: var(--timer-height);
-  min-height: var(--timer-height);
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 0 16px;
+  justify-content: space-between;
+  padding: 10px 16px;
   background: var(--bg-elevated);
-  border-bottom: 1px solid var(--border);
 }
 
-.timer-left, .timer-right {
+.timer-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.timer-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.timer-target {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.timer-center {
   display: flex;
   align-items: baseline;
-  gap: 4px;
-  min-width: 70px;
+  gap: 2px;
 }
 
 .timer-value {
   font-family: var(--font-mono);
-  font-size: 22px;
+  font-size: 36px;
   font-weight: 700;
+  color: var(--text-primary);
 }
 
 .timer-value.urgent { color: var(--yellow); }
@@ -193,21 +227,31 @@ body {
   50% { opacity: 0.5; }
 }
 
-.timer-unit, .player-label {
-  font-size: 11px;
+.timer-unit {
+  font-size: 16px;
   color: var(--text-dim);
-  text-transform: uppercase;
 }
 
-.timer-progress {
-  flex: 1;
-  padding: 0 8px;
+.timer-right {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.player-count {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.player-label {
+  font-size: 11px;
+  color: var(--text-dim);
 }
 
 .progress-track {
-  height: 6px;
+  height: 4px;
   background: var(--bg-dark);
-  border-radius: 3px;
   overflow: hidden;
 }
 
@@ -215,8 +259,7 @@ body {
   height: 100%;
   width: 0%;
   background: linear-gradient(90deg, var(--green), var(--btc-orange));
-  border-radius: 3px;
-  transition: width 0.3s linear;
+  transition: width 0.1s linear;
 }
 
 .progress-fill.urgent {
@@ -227,23 +270,40 @@ body {
   background: var(--red);
 }
 
-.timer-right {
-  justify-content: flex-end;
+/* ==========================================
+   CHART LEGEND
+   ========================================== */
+
+.chart-legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  background: var(--bg-dark);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
-.player-count {
-  font-family: var(--font-mono);
-  font-size: 16px;
-  font-weight: 600;
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
 }
 
 /* ==========================================
-   CHART CONTAINER - THE KEY FIX
+   CHART CONTAINER
    ========================================== */
 
 .chart-container {
   flex: 1;
-  min-height: 0; /* Critical! */
+  min-height: 0;
   position: relative;
   background: var(--bg-dark);
 }
@@ -254,6 +314,8 @@ body {
   left: 0;
   right: 0;
   bottom: 0;
+  touch-action: pan-x pan-y pinch-zoom;
+  -webkit-touch-callout: none;
 }
 
 /* ==========================================
@@ -289,14 +351,40 @@ body {
   background: var(--bg-surface);
 }
 
+.prediction-prompt {
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+.prompt-main {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.prompt-sub {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.input-hint {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 10px;
+}
+
 .price-input-wrap {
   display: flex;
   align-items: center;
   background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0 12px;
-  margin-bottom: 10px;
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  padding: 0 14px;
+  margin-bottom: 12px;
+  transition: border-color 0.15s;
 }
 
 .price-input-wrap:focus-within {
@@ -305,7 +393,7 @@ body {
 
 .input-prefix {
   font-family: var(--font-mono);
-  font-size: 18px;
+  font-size: 20px;
   color: var(--text-dim);
 }
 
@@ -315,52 +403,50 @@ body {
   border: none;
   outline: none;
   font-family: var(--font-mono);
-  font-size: 20px;
+  font-size: 24px;
   font-weight: 600;
   color: var(--text-primary);
-  padding: 12px 8px;
+  padding: 14px 8px;
 }
 
 .price-input::placeholder {
   color: var(--text-dim);
 }
 
-.price-input.submitted {
-  color: var(--green);
-}
-
 .btn-submit {
   width: 100%;
-  padding: 12px;
+  padding: 14px;
   background: var(--btc-orange);
   color: #000;
   font-family: var(--font-main);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
   border: none;
-  border-radius: 8px;
+  border-radius: 12px;
   cursor: pointer;
-  transition: opacity 0.15s;
+  transition: all 0.15s;
 }
 
 .btn-submit:hover:not(:disabled) {
-  opacity: 0.9;
+  filter: brightness(1.1);
+  transform: translateY(-1px);
 }
 
 .btn-submit:disabled {
-  background: var(--green);
-  cursor: default;
+  background: var(--text-dim);
+  cursor: not-allowed;
 }
 
 /* Locked State */
-.locked-price {
+.your-prediction-locked {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px;
-  background: var(--bg-input);
-  border-radius: 8px;
-  margin-bottom: 8px;
+  padding: 12px 14px;
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  border-radius: 10px;
+  margin-bottom: 12px;
 }
 
 .locked-label {
@@ -368,18 +454,64 @@ body {
   color: var(--text-dim);
 }
 
-.locked-value {
+.locked-price-value {
   font-family: var(--font-mono);
   font-size: 18px;
   font-weight: 700;
   color: var(--green);
 }
 
+.live-rank-display {
+  text-align: center;
+  padding: 20px;
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.15), rgba(34, 197, 94, 0.05));
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  border-radius: 12px;
+  margin-bottom: 8px;
+}
+
+.your-rank {
+  font-family: var(--font-mono);
+  font-size: 36px;
+  font-weight: 700;
+  color: var(--green);
+  margin-bottom: 4px;
+}
+
+.your-distance {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
 .locked-status {
   text-align: center;
-  font-size: 13px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* Rank indicators */
+.rank-up {
   color: var(--green);
-  font-weight: 600;
+  font-size: 12px;
+  margin-left: 4px;
+  animation: bounce-up 0.3s ease;
+}
+
+.rank-down {
+  color: var(--red);
+  font-size: 12px;
+  margin-left: 4px;
+  animation: bounce-down 0.3s ease;
+}
+
+@keyframes bounce-up {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+@keyframes bounce-down {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(4px); }
 }
 
 /* Standings List */
@@ -395,17 +527,19 @@ body {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .standing-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: 24px 12px 1fr auto auto;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   background: var(--bg-surface);
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 13px;
+  transition: all 0.15s;
 }
 
 .standing-item.is-leader {
@@ -421,8 +555,8 @@ body {
 .standing-rank {
   font-family: var(--font-mono);
   font-weight: 700;
-  width: 20px;
   color: var(--text-dim);
+  text-align: center;
 }
 
 .standing-item.is-leader .standing-rank {
@@ -430,23 +564,39 @@ body {
 }
 
 .standing-color {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
 }
 
 .standing-name {
-  flex: 1;
-  font-weight: 500;
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.standing-item.is-you .standing-name {
+  color: var(--green);
+}
+
+.standing-price {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
 }
 
 .standing-diff {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-dim);
+  min-width: 50px;
+  text-align: right;
+}
+
+.standing-diff.close {
+  color: var(--green);
+  font-weight: 600;
 }
 
 /* Results */
@@ -472,9 +622,9 @@ body {
 
 .winner-info {
   text-align: center;
-  padding: 16px;
+  padding: 20px;
   background: var(--bg-input);
-  border-radius: 8px;
+  border-radius: 12px;
   margin-bottom: 12px;
 }
 
@@ -488,31 +638,32 @@ body {
 
 .winner-name {
   display: block;
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 
 .winner-accuracy {
   font-family: var(--font-mono);
-  font-size: 24px;
-  font-weight: 700;
+  font-size: 16px;
+  font-weight: 600;
   color: var(--green);
 }
 
 .results-prices {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   font-size: 13px;
+  margin-bottom: 12px;
 }
 
 .result-item {
   display: flex;
   justify-content: space-between;
-  padding: 8px;
+  padding: 10px 12px;
   background: var(--bg-input);
-  border-radius: 4px;
+  border-radius: 6px;
 }
 
 .result-item span:first-child {
@@ -524,11 +675,25 @@ body {
   font-weight: 600;
 }
 
+.your-result {
+  text-align: center;
+  padding: 12px;
+  background: var(--bg-input);
+  border-radius: 8px;
+  margin-bottom: 12px;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.your-result .win-message {
+  color: var(--green);
+  font-weight: 600;
+}
+
 .next-round {
   text-align: center;
   font-size: 12px;
   color: var(--text-dim);
-  margin-top: 12px;
 }
 
 /* ==========================================
@@ -564,6 +729,208 @@ body {
     transform: translateY(100vh) rotate(720deg);
     opacity: 0;
   }
+}
+
+/* ==========================================
+   MOBILE OPTIMIZATION
+   ========================================== */
+
+@supports (-webkit-touch-callout: none) {
+  #app {
+    height: -webkit-fill-available;
+  }
+}
+
+@media (max-width: 768px) {
+  :root {
+    --header-height: 48px;
+    --sidebar-width: 100%;
+  }
+  
+  body {
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  #app {
+    min-height: 100vh;
+    min-height: -webkit-fill-available;
+    overflow: visible;
+  }
+  
+  .header {
+    height: var(--header-height);
+    min-height: var(--header-height);
+    padding: 0 12px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  
+  .brand-name {
+    font-size: 14px;
+  }
+  
+  .brand-icon {
+    font-size: 18px;
+  }
+  
+  .streak-badge {
+    margin-left: 8px;
+    padding: 2px 8px;
+  }
+  
+  .streak-count {
+    font-size: 12px;
+  }
+  
+  .price-display {
+    gap: 6px;
+  }
+  
+  .price-label {
+    display: none;
+  }
+  
+  .current-price {
+    font-size: 16px;
+  }
+  
+  .price-change {
+    font-size: 10px;
+    padding: 2px 6px;
+  }
+  
+  .main {
+    flex-direction: column;
+    overflow: visible;
+  }
+  
+  .chart-area {
+    height: 45vh;
+    min-height: 280px;
+    max-height: 380px;
+  }
+  
+  .chart-legend {
+    padding: 6px 12px;
+    font-size: 11px;
+    gap: 12px;
+  }
+  
+  .timer-bar {
+    padding: 8px 12px;
+  }
+  
+  .timer-value {
+    font-size: 28px;
+  }
+  
+  .timer-label {
+    font-size: 9px;
+  }
+  
+  .timer-target {
+    font-size: 12px;
+  }
+  
+  .sidebar {
+    display: flex;
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    overflow: visible;
+  }
+  
+  .sidebar-section {
+    padding: 12px;
+  }
+  
+  .prediction-section {
+    order: -1;
+  }
+  
+  .prediction-prompt {
+    margin-bottom: 12px;
+  }
+  
+  .prompt-main {
+    font-size: 14px;
+  }
+  
+  .prompt-sub {
+    font-size: 12px;
+  }
+  
+  .price-input {
+    font-size: 20px;
+    padding: 12px 8px;
+  }
+  
+  .btn-submit {
+    padding: 14px;
+    font-size: 14px;
+  }
+  
+  .standings-section {
+    max-height: 200px;
+  }
+  
+  .section-title {
+    font-size: 11px;
+    margin-bottom: 8px;
+  }
+  
+  .standing-item {
+    padding: 8px 10px;
+    font-size: 12px;
+    grid-template-columns: 20px 10px 1fr auto;
+  }
+  
+  .standing-price {
+    display: none;
+  }
+  
+  .winner-info {
+    padding: 14px;
+  }
+  
+  .winner-name {
+    font-size: 18px;
+  }
+  
+  .winner-accuracy {
+    font-size: 14px;
+  }
+}
+
+@media (pointer: coarse) {
+  .btn-submit {
+    min-height: 50px;
+  }
+  
+  .price-input-wrap {
+    min-height: 54px;
+  }
+  
+  .standing-item {
+    min-height: 44px;
+  }
+}
+
+/* Touch utilities */
+.timer-bar,
+.standings-list,
+.header {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.standings-list,
+.sidebar {
+  -webkit-overflow-scrolling: touch;
 }
 
 /* ==========================================
