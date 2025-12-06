@@ -1,923 +1,632 @@
-// Chart Predictoor - Production Multiplayer Version
-// With Supabase real-time sync, ghost lines, and synchronized rounds
-
+// Predictoor - Clean Layout, Minimal Y-Axis Labels
 (function() {
   'use strict';
 
-  // ============================================
-  // CONFIGURATION
-  // ============================================
-  const CONFIG = {
-    // Supabase - Replace with your project details
-    SUPABASE_URL: 'YOUR_SUPABASE_URL',
-    SUPABASE_ANON_KEY: 'YOUR_SUPABASE_ANON_KEY',
-    
-    // Feature flags
-    MULTIPLAYER_ENABLED: false, // Set to true when Supabase is configured
-    
-    // Timing
-    ROUND_DURATION: 60, // seconds
-    LOCK_BEFORE_END: 5, // seconds before end when submissions lock
-  };
+  const ROUND_DURATION = 60;
 
-  // Check if Supabase is configured
-  const isMultiplayer = CONFIG.MULTIPLAYER_ENABLED && 
-    CONFIG.SUPABASE_URL !== 'YOUR_SUPABASE_URL';
-
-  // ============================================
-  // STATE
-  // ============================================
   const state = {
-    // Supabase
-    supabase: null,
-    userId: null,
-    sessionToken: null,
-    
-    // Chart
     chart: null,
     series: null,
     ws: null,
     
-    // Price
+    // Prices
     currentPrice: 0,
     displayPrice: 0,
-    previousPrice: 0,
-    startPrice: 0,
-    lastTime: 0,
+    targetPrice: 0,
+    priceHistory: [],
+    priceBuffer: [],
     
-    // Round (synchronized)
-    currentRound: null,
-    roundEndTime: null,
-    roundStatus: 'waiting', // waiting, active, locked, results
+    // Round
+    roundStartTime: 0,
+    roundEndTime: 0,
+    roundStartPrice: 0,
+    roundStatus: 'active',
     
-    // Prediction
-    mode: 'idle', // idle, drawing, submitted, results
-    targetPrice: null,
+    // Predictions
     myPrediction: null,
+    predictions: [], // { id, nickname, price, color, line }
     
-    // Ghost lines (other players)
-    ghostPredictions: [],
+    // Only these get Y-axis labels
+    myPriceLine: null,
+    leaderPriceLine: null,
+    currentLeaderId: null,
     
-    // Drawing
-    isDrawing: false,
-    drawPath: [],
-    
-    // Leaderboard
-    leaderboard: [],
-    roundResults: [],
-    
-    // UI
-    playerCount: 0,
+    // Timing
+    lastChartUpdate: 0,
   };
 
   const DOM = {};
 
-  // ============================================
-  // INITIALIZATION
-  // ============================================
-  async function init() {
+  // ==========================================
+  // INIT
+  // ==========================================
+  function init() {
     cacheDom();
     initChart();
-    initCanvas();
     setupEventListeners();
     
-    // Load historical data and start price feed
-    await loadHistoricalData();
-    connectPriceFeed();
-    
-    if (isMultiplayer) {
-      await initSupabase();
-      await joinGame();
-      startRoundSync();
-    } else {
-      // Single player mode - use mock data
-      initMockLeaderboard();
-      startLocalRound();
-    }
-    
-    startAnimationLoop();
+    // Load data FIRST, then start everything else
+    loadHistoricalData().then(() => {
+      console.log('Data loaded, price:', state.currentPrice);
+      startRound();
+      connectWebSocket();
+      setTimeout(addSimulatedPlayers, 500);
+      // Start animation loop AFTER we have data
+      requestAnimationFrame(animationLoop);
+    }).catch(err => {
+      console.error('Failed to load data:', err);
+      // Fallback: start anyway with default price
+      state.currentPrice = 90000;
+      state.displayPrice = 90000;
+      state.targetPrice = 90000;
+      startRound();
+      connectWebSocket();
+      setTimeout(addSimulatedPlayers, 500);
+      requestAnimationFrame(animationLoop);
+    });
   }
 
   function cacheDom() {
-    DOM.tickerPrice = document.getElementById('ticker-price');
-    DOM.tickerChange = document.getElementById('ticker-change');
-    DOM.tickerArrow = document.getElementById('ticker-arrow');
-    DOM.lastUpdate = document.getElementById('last-update');
-    DOM.chartContainer = document.getElementById('chart-container');
-    DOM.canvas = document.getElementById('drawing-canvas');
-    
-    // Round info
-    DOM.roundInfo = document.getElementById('round-info');
-    DOM.roundNumber = document.getElementById('round-number');
-    DOM.roundTimer = document.getElementById('round-timer');
+    DOM.chartWrapper = document.getElementById('chart-wrapper');
+    DOM.price = document.getElementById('current-price');
+    DOM.change = document.getElementById('price-change');
+    DOM.timer = document.getElementById('round-timer');
+    DOM.progress = document.getElementById('progress-fill');
     DOM.playerCount = document.getElementById('player-count');
     
-    // Panels
-    DOM.waitingMode = document.getElementById('waiting-mode');
-    DOM.drawingMode = document.getElementById('drawing-mode');
-    DOM.submittedMode = document.getElementById('submitted-mode');
-    DOM.resultsMode = document.getElementById('results-mode');
-    
-    // Drawing
-    DOM.targetPrice = document.getElementById('target-price');
-    DOM.targetDiff = document.getElementById('target-diff');
-    DOM.btnDraw = document.getElementById('btn-draw');
-    DOM.btnCancel = document.getElementById('btn-cancel');
+    DOM.inputMode = document.getElementById('input-mode');
+    DOM.lockedMode = document.getElementById('locked-mode');
+    DOM.priceInput = document.getElementById('price-input');
     DOM.btnSubmit = document.getElementById('btn-submit');
+    DOM.lockedValue = document.getElementById('locked-value');
     
-    // Results
-    DOM.resultsList = document.getElementById('results-list');
-    DOM.myResult = document.getElementById('my-result');
+    DOM.standingsList = document.getElementById('standings-list');
     
-    // Leaderboard
-    DOM.leaderboard = document.getElementById('leaderboard');
+    DOM.resultsSection = document.getElementById('results-section');
+    DOM.winnerName = document.getElementById('winner-name');
+    DOM.winnerPrice = document.getElementById('winner-price');
+    DOM.finalPrice = document.getElementById('final-price');
+    DOM.winnerAccuracy = document.getElementById('winner-accuracy');
+    
+    DOM.confetti = document.getElementById('confetti');
   }
 
-  // ============================================
-  // SUPABASE INTEGRATION
-  // ============================================
-  async function initSupabase() {
-    // Dynamic import for Supabase
-    const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
-    state.supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
-    
-    // Get or create session token
-    state.sessionToken = localStorage.getItem('predictoor_session');
-    if (!state.sessionToken) {
-      state.sessionToken = crypto.randomUUID();
-      localStorage.setItem('predictoor_session', state.sessionToken);
-    }
-  }
-
-  async function joinGame() {
-    if (!state.supabase) return;
-    
-    try {
-      // Get or create user
-      const { data, error } = await state.supabase.rpc('get_or_create_user', {
-        p_session_token: state.sessionToken,
-        p_nickname: localStorage.getItem('predictoor_nickname')
-      });
-      
-      if (error) throw error;
-      state.userId = data;
-      
-      // Subscribe to current round
-      subscribeToRound();
-      
-      // Subscribe to predictions (ghost lines)
-      subscribeToPredictions();
-      
-      // Load leaderboard
-      await loadLeaderboard();
-      
-    } catch (e) {
-      console.error('Failed to join game:', e);
-    }
-  }
-
-  function subscribeToRound() {
-    if (!state.supabase) return;
-    
-    state.supabase
-      .channel('rounds')
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'rounds'
-      }, (payload) => {
-        handleRoundUpdate(payload.new);
-      })
-      .subscribe();
-  }
-
-  function subscribeToPredictions() {
-    if (!state.supabase) return;
-    
-    state.supabase
-      .channel('predictions')
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'predictions'
-      }, (payload) => {
-        // Add ghost line for other player's prediction
-        if (payload.new.user_id !== state.userId && payload.new.draw_path) {
-          addGhostPrediction(payload.new);
-        }
-      })
-      .subscribe();
-  }
-
-  async function loadLeaderboard() {
-    if (!state.supabase) return;
-    
-    try {
-      const { data, error } = await state.supabase.rpc('get_leaderboard', { p_limit: 10 });
-      if (error) throw error;
-      state.leaderboard = data || [];
-      renderLeaderboard();
-    } catch (e) {
-      console.error('Failed to load leaderboard:', e);
-    }
-  }
-
-  async function submitPrediction() {
-    if (!state.targetPrice) return;
-    
-    if (isMultiplayer && state.supabase && state.currentRound) {
-      try {
-        // Normalize draw path for storage
-        const normalizedPath = state.drawPath.map(p => ({
-          x: p.x / DOM.canvas.width,
-          y: p.y / DOM.canvas.height
-        }));
-        
-        const { data, error } = await state.supabase.rpc('submit_prediction', {
-          p_session_token: state.sessionToken,
-          p_round_id: state.currentRound.id,
-          p_target_price: state.targetPrice,
-          p_draw_path: normalizedPath
-        });
-        
-        if (error) throw error;
-        
-        if (data?.[0]?.success) {
-          state.myPrediction = {
-            target_price: state.targetPrice,
-            draw_path: state.drawPath
-          };
-          setMode('submitted');
-        } else {
-          console.error('Submission failed:', data?.[0]?.message);
-        }
-      } catch (e) {
-        console.error('Failed to submit prediction:', e);
-      }
-    } else {
-      // Local mode
-      state.myPrediction = {
-        target_price: state.targetPrice,
-        draw_path: [...state.drawPath]
-      };
-      setMode('submitted');
-    }
-  }
-
-  // ============================================
-  // ROUND MANAGEMENT
-  // ============================================
-  function startRoundSync() {
-    // Poll for round updates every second
-    setInterval(async () => {
-      if (!state.supabase) return;
-      
-      try {
-        // Call edge function to manage round lifecycle
-        await fetch(`${CONFIG.SUPABASE_URL}/functions/v1/manage-round`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${CONFIG.SUPABASE_ANON_KEY}`
-          },
-          body: JSON.stringify({ action: 'check_rounds' })
-        });
-        
-        // Get current round
-        const { data } = await state.supabase.rpc('get_current_round');
-        if (data?.[0]) {
-          handleRoundUpdate(data[0]);
-        }
-      } catch (e) {
-        console.error('Round sync error:', e);
-      }
-    }, 1000);
-  }
-
-  function handleRoundUpdate(round) {
-    if (!round) return;
-    
-    const prevRound = state.currentRound;
-    state.currentRound = round;
-    state.playerCount = round.player_count || 0;
-    
-    // Update UI
-    if (DOM.roundNumber) DOM.roundNumber.textContent = `#${round.id}`;
-    if (DOM.playerCount) DOM.playerCount.textContent = `${state.playerCount} players`;
-    
-    // Handle status changes
-    if (round.status === 'active' && state.mode === 'idle') {
-      setMode('drawing');
-      state.ghostPredictions = [];
-    }
-    
-    if (round.status === 'locked' && state.mode === 'drawing') {
-      // Force submit or cancel
-      if (state.targetPrice) {
-        submitPrediction();
-      } else {
-        setMode('submitted');
-      }
-    }
-    
-    if (round.status === 'completed' && prevRound?.status !== 'completed') {
-      showResults(round);
-    }
-    
-    // Update round end time
-    if (round.end_time) {
-      state.roundEndTime = new Date(round.end_time).getTime();
-    }
-  }
-
-  async function showResults(round) {
-    setMode('results');
-    
-    if (isMultiplayer && state.supabase) {
-      try {
-        const response = await fetch(`${CONFIG.SUPABASE_URL}/functions/v1/manage-round`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${CONFIG.SUPABASE_ANON_KEY}`
-          },
-          body: JSON.stringify({ action: 'get_results', round_id: round.id })
-        });
-        
-        const { predictions } = await response.json();
-        state.roundResults = predictions || [];
-        renderResults();
-        
-        // Refresh leaderboard
-        await loadLeaderboard();
-        
-      } catch (e) {
-        console.error('Failed to get results:', e);
-      }
-    } else {
-      // Local mode results
-      calculateLocalResults();
-    }
-    
-    // After 8 seconds, start new round
-    setTimeout(() => {
-      resetForNewRound();
-    }, 8000);
-  }
-
-  function resetForNewRound() {
-    state.targetPrice = null;
-    state.myPrediction = null;
-    state.drawPath = [];
-    state.ghostPredictions = [];
-    state.roundResults = [];
-    
-    setMode('idle');
-    
-    // Reset chart scroll
-    state.chart.timeScale().scrollToRealTime();
-    state.chart.timeScale().applyOptions({ rightOffset: 50 });
-    
-    // Clear canvas
-    const ctx = DOM.canvas.getContext('2d');
-    ctx.clearRect(0, 0, DOM.canvas.width, DOM.canvas.height);
-  }
-
-  // Local round for single player
-  function startLocalRound() {
-    const now = Date.now();
-    const roundStart = Math.ceil(now / 60000) * 60000;
-    
-    state.currentRound = {
-      id: Math.floor(roundStart / 60000),
-      start_time: new Date(roundStart).toISOString(),
-      end_time: new Date(roundStart + 60000).toISOString(),
-      status: 'waiting'
-    };
-    
-    state.roundEndTime = roundStart + 60000;
-    
-    // Check round status every second
-    setInterval(() => {
-      const now = Date.now();
-      const roundStart = state.currentRound ? new Date(state.currentRound.start_time).getTime() : 0;
-      const roundEnd = state.roundEndTime || 0;
-      
-      if (now >= roundStart && now < roundEnd - 5000 && state.currentRound.status === 'waiting') {
-        state.currentRound.status = 'active';
-        if (state.mode === 'idle') setMode('drawing');
-      }
-      
-      if (now >= roundEnd - 5000 && now < roundEnd && state.currentRound.status === 'active') {
-        state.currentRound.status = 'locked';
-        if (state.mode === 'drawing' && state.targetPrice) {
-          submitPrediction();
-        }
-      }
-      
-      if (now >= roundEnd && state.currentRound.status !== 'completed') {
-        state.currentRound.status = 'completed';
-        showResults(state.currentRound);
-        
-        // Schedule next round
-        setTimeout(() => {
-          const nextRoundStart = Math.ceil(Date.now() / 60000) * 60000;
-          state.currentRound = {
-            id: Math.floor(nextRoundStart / 60000),
-            start_time: new Date(nextRoundStart).toISOString(),
-            end_time: new Date(nextRoundStart + 60000).toISOString(),
-            status: 'waiting'
-          };
-          state.roundEndTime = nextRoundStart + 60000;
-        }, 8000);
-      }
-    }, 100);
-  }
-
-  function calculateLocalResults() {
-    if (!state.myPrediction) {
-      state.roundResults = [];
-      return;
-    }
-    
-    const accuracy = Math.max(0, 100 - (Math.abs(state.currentPrice - state.myPrediction.target_price) / state.currentPrice * 1000));
-    
-    state.roundResults = [
-      { rank: 1, users: { nickname: localStorage.getItem('predictoor_nickname') || 'You' }, target_price: state.myPrediction.target_price, accuracy }
-    ];
-    
-    renderResults();
-  }
-
-  // ============================================
-  // GHOST LINES
-  // ============================================
-  function addGhostPrediction(prediction) {
-    if (!prediction.draw_path) return;
-    
-    // Convert normalized path back to canvas coordinates
-    const path = prediction.draw_path.map(p => ({
-      x: p.x * DOM.canvas.width,
-      y: p.y * DOM.canvas.height
-    }));
-    
-    state.ghostPredictions.push({
-      user_id: prediction.user_id,
-      path: path,
-      target_price: prediction.target_price,
-      color: `hsl(${Math.random() * 360}, 50%, 50%)`,
-      opacity: 0.3
-    });
-    
-    // Update player count
-    state.playerCount = state.ghostPredictions.length + 1;
-    if (DOM.playerCount) DOM.playerCount.textContent = `${state.playerCount} players`;
-  }
-
-  // ============================================
-  // MODE MANAGEMENT
-  // ============================================
-  function setMode(mode) {
-    state.mode = mode;
-    
-    // Hide all panels
-    DOM.waitingMode?.classList.add('hidden');
-    DOM.drawingMode?.classList.add('hidden');
-    DOM.submittedMode?.classList.add('hidden');
-    DOM.resultsMode?.classList.add('hidden');
-    
-    // Show appropriate panel
-    switch (mode) {
-      case 'idle':
-        DOM.waitingMode?.classList.remove('hidden');
-        DOM.canvas.classList.remove('active');
-        break;
-      case 'drawing':
-        DOM.drawingMode?.classList.remove('hidden');
-        DOM.canvas.classList.add('active');
-        DOM.targetPrice.textContent = 'Draw on chart';
-        DOM.targetPrice.classList.add('empty');
-        DOM.targetDiff.textContent = '';
-        break;
-      case 'submitted':
-        DOM.submittedMode?.classList.remove('hidden');
-        DOM.canvas.classList.remove('active');
-        break;
-      case 'results':
-        DOM.resultsMode?.classList.remove('hidden');
-        DOM.canvas.classList.remove('active');
-        break;
-    }
-  }
-
-  // ============================================
-  // CHART
-  // ============================================
+  // ==========================================
+  // CHART - Proper sizing
+  // ==========================================
   function initChart() {
-    state.chart = LightweightCharts.createChart(DOM.chartContainer, {
-      width: DOM.chartContainer.clientWidth,
-      height: DOM.chartContainer.clientHeight,
+    const container = DOM.chartWrapper;
+    const rect = container.getBoundingClientRect();
+    
+    state.chart = LightweightCharts.createChart(container, {
+      width: rect.width,
+      height: rect.height,
       layout: {
-        background: { color: '#111114' },
-        textColor: '#606068',
+        background: { color: '#08080a' },
+        textColor: '#52525b',
         fontFamily: "'JetBrains Mono', monospace",
+        fontSize: 11,
       },
       grid: {
         vertLines: { visible: false },
-        horzLines: { color: 'rgba(255, 255, 255, 0.04)' },
+        horzLines: { color: 'rgba(255,255,255,0.03)' },
       },
       timeScale: {
         borderVisible: false,
         timeVisible: true,
         secondsVisible: true,
-        rightOffset: 50,
-        barSpacing: 8,
-        shiftVisibleRangeOnNewBar: true,
+        rightOffset: 5,
+        barSpacing: 4,
       },
       rightPriceScale: {
         borderVisible: false,
-        scaleMargins: { top: 0.15, bottom: 0.15 },
+        scaleMargins: { top: 0.1, bottom: 0.1 },
       },
       crosshair: {
         mode: LightweightCharts.CrosshairMode.Normal,
-        vertLine: { color: 'rgba(247, 147, 26, 0.3)', labelBackgroundColor: '#f7931a' },
-        horzLine: { color: 'rgba(247, 147, 26, 0.3)', labelBackgroundColor: '#f7931a' },
+        vertLine: { color: 'rgba(247,147,26,0.3)', style: 2, labelBackgroundColor: '#f7931a' },
+        horzLine: { color: 'rgba(247,147,26,0.3)', style: 2, labelBackgroundColor: '#f7931a' },
       },
+      handleScroll: false,
+      handleScale: false,
     });
 
     state.series = state.chart.addLineSeries({
       color: '#f7931a',
       lineWidth: 2,
       priceLineVisible: true,
-      priceLineColor: 'rgba(247, 147, 26, 0.5)',
       lastValueVisible: true,
     });
 
-    new ResizeObserver(() => {
-      state.chart.applyOptions({
-        width: DOM.chartContainer.clientWidth,
-        height: DOM.chartContainer.clientHeight,
-      });
-      resizeCanvas();
-    }).observe(DOM.chartContainer);
-  }
-
-  async function loadHistoricalData() {
-    try {
-      const response = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=60');
-      const klines = await response.json();
-      
-      const data = [];
-      for (const k of klines) {
-        data.push({ time: Math.floor(k[0] / 1000), value: parseFloat(k[4]) });
+    // Resize observer for responsive sizing
+    const resizeObserver = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        state.chart.applyOptions({ width, height });
       }
-      
-      state.series.setData(data);
-      state.currentPrice = data[data.length - 1].value;
-      state.displayPrice = state.currentPrice;
-      state.startPrice = data[0].value;
-      state.lastTime = data[data.length - 1].time;
-      
-      updateTicker();
-      state.chart.timeScale().scrollToRealTime();
-    } catch (e) {
-      console.error('Failed to load data:', e);
-    }
-  }
-
-  function connectPriceFeed() {
-    state.ws = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@aggTrade');
+    });
+    resizeObserver.observe(container);
     
-    let lastUpdate = 0;
-    state.ws.onmessage = (event) => {
-      const now = Date.now();
-      if (now - lastUpdate < 100) return;
-      lastUpdate = now;
-      
-      const data = JSON.parse(event.data);
-      state.previousPrice = state.currentPrice;
-      state.currentPrice = parseFloat(data.p);
-      
-      if (state.startPrice === 0) {
-        state.startPrice = state.currentPrice;
-        state.displayPrice = state.currentPrice;
-      }
-      
-      animatePriceChange();
-    };
+    // Click to set price
+    container.style.cursor = 'crosshair';
+    container.addEventListener('click', handleChartClick);
+  }
+
+  function handleChartClick(e) {
+    if (state.roundStatus !== 'active' || state.myPrediction) return;
     
-    state.ws.onclose = () => setTimeout(connectPriceFeed, 2000);
-  }
-
-  function animatePriceChange() {
-    if (!DOM.tickerPrice) return;
-    
-    const dir = state.currentPrice > state.previousPrice ? 'up' : 
-                state.currentPrice < state.previousPrice ? 'down' : 'neutral';
-    
-    DOM.tickerPrice.classList.remove('pulse-up', 'pulse-down');
-    void DOM.tickerPrice.offsetWidth;
-    DOM.tickerPrice.classList.add(`pulse-${dir}`);
-    
-    if (DOM.tickerArrow) {
-      DOM.tickerArrow.textContent = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '';
-      DOM.tickerArrow.className = `ticker-arrow ${dir}`;
-    }
-  }
-
-  // ============================================
-  // ANIMATION LOOP
-  // ============================================
-  function startAnimationLoop() {
-    let lastChartUpdate = 0;
-    
-    function animate(timestamp) {
-      // Lerp price
-      state.displayPrice += (state.currentPrice - state.displayPrice) * 0.12;
-      updateTicker();
-      
-      // Update chart
-      if (timestamp - lastChartUpdate >= 500 && state.currentPrice > 0) {
-        lastChartUpdate = timestamp;
-        const now = Math.floor(Date.now() / 1000);
-        if (now > state.lastTime) {
-          state.series.update({ time: now, value: state.displayPrice });
-          state.lastTime = now;
-        } else {
-          state.series.update({ time: state.lastTime, value: state.displayPrice });
-        }
-      }
-      
-      // Update round timer
-      updateRoundTimer();
-      
-      // Redraw canvas
-      if (state.mode === 'drawing' || state.mode === 'submitted') {
-        redrawCanvas();
-      }
-      
-      requestAnimationFrame(animate);
-    }
-    
-    requestAnimationFrame(animate);
-  }
-
-  function updateTicker() {
-    if (!DOM.tickerPrice) return;
-    DOM.tickerPrice.textContent = formatPrice(state.displayPrice);
-    
-    if (state.startPrice > 0) {
-      const change = ((state.displayPrice - state.startPrice) / state.startPrice) * 100;
-      DOM.tickerChange.textContent = (change >= 0 ? '+' : '') + change.toFixed(2) + '%';
-      DOM.tickerChange.className = 'ticker-change ' + (change >= 0 ? 'up' : 'down');
-    }
-  }
-
-  function updateRoundTimer() {
-    if (!DOM.roundTimer || !state.roundEndTime) return;
-    
-    const remaining = Math.max(0, Math.ceil((state.roundEndTime - Date.now()) / 1000));
-    DOM.roundTimer.textContent = remaining + 's';
-    DOM.roundTimer.classList.toggle('ending', remaining <= 5);
-  }
-
-  // ============================================
-  // CANVAS
-  // ============================================
-  function initCanvas() {
-    resizeCanvas();
-    DOM.canvas.addEventListener('pointerdown', onPointerDown);
-    DOM.canvas.addEventListener('pointermove', onPointerMove);
-    DOM.canvas.addEventListener('pointerup', onPointerUp);
-    DOM.canvas.addEventListener('pointerleave', onPointerUp);
-  }
-
-  function resizeCanvas() {
-    const dpr = window.devicePixelRatio || 1;
-    DOM.canvas.width = DOM.chartContainer.clientWidth * dpr;
-    DOM.canvas.height = DOM.chartContainer.clientHeight * dpr;
-    DOM.canvas.style.width = DOM.chartContainer.clientWidth + 'px';
-    DOM.canvas.style.height = DOM.chartContainer.clientHeight + 'px';
-  }
-
-  function getCoord(e) {
-    const rect = DOM.canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    return { x: (e.clientX - rect.left) * dpr, y: (e.clientY - rect.top) * dpr };
-  }
-
-  function getAnchor() {
-    const now = state.lastTime || Math.floor(Date.now() / 1000);
-    const x = state.chart.timeScale().timeToCoordinate(now);
-    const y = state.series.priceToCoordinate(state.displayPrice);
-    if (x === null || y === null) return null;
-    const dpr = window.devicePixelRatio || 1;
-    return { x: x * dpr, y: y * dpr };
-  }
-
-  function onPointerDown(e) {
-    if (state.mode !== 'drawing') return;
-    e.preventDefault();
-    state.isDrawing = true;
-    state.drawPath = [getCoord(e)];
-  }
-
-  function onPointerMove(e) {
-    if (state.mode !== 'drawing' || !state.isDrawing) return;
-    e.preventDefault();
-    state.drawPath.push(getCoord(e));
-    updateTargetFromDrawing();
-  }
-
-  function onPointerUp() {
-    state.isDrawing = false;
-  }
-
-  function updateTargetFromDrawing() {
-    if (state.drawPath.length === 0) return;
-    const end = state.drawPath[state.drawPath.length - 1];
-    const dpr = window.devicePixelRatio || 1;
-    const price = state.series.coordinateToPrice(end.y / dpr);
+    const rect = DOM.chartWrapper.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const price = state.series.coordinateToPrice(y);
     
     if (price && price > 0) {
-      state.targetPrice = price;
-      DOM.targetPrice.textContent = formatPrice(price);
-      DOM.targetPrice.classList.remove('empty');
-      
-      const diff = price - state.currentPrice;
-      const pct = (diff / state.currentPrice) * 100;
-      DOM.targetDiff.textContent = `${diff >= 0 ? '+' : ''}${formatPrice(diff)} (${diff >= 0 ? '+' : ''}${pct.toFixed(2)}%)`;
-      DOM.targetDiff.className = 'target-diff ' + (diff >= 0 ? 'up' : 'down');
+      DOM.priceInput.value = Math.round(price).toString();
     }
   }
 
-  function redrawCanvas() {
-    const ctx = DOM.canvas.getContext('2d');
-    const w = DOM.canvas.width;
-    const h = DOM.canvas.height;
-    const dpr = window.devicePixelRatio || 1;
+  // ==========================================
+  // DATA
+  // ==========================================
+  async function loadHistoricalData() {
+    const response = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=60');
+    if (!response.ok) throw new Error('API error: ' + response.status);
     
-    ctx.clearRect(0, 0, w, h);
+    const klines = await response.json();
+    if (!klines || klines.length === 0) throw new Error('No data received');
     
-    const anchor = getAnchor();
-    if (!anchor) return;
+    const data = [];
+    const now = Math.floor(Date.now() / 1000);
     
-    // Draw ghost lines first (behind user's line)
-    for (const ghost of state.ghostPredictions) {
-      if (ghost.path.length > 1) {
-        ctx.beginPath();
-        ctx.strokeStyle = `rgba(150, 150, 150, ${ghost.opacity})`;
-        ctx.lineWidth = 2 * dpr;
-        ctx.lineCap = 'round';
-        ctx.moveTo(ghost.path[0].x, ghost.path[0].y);
-        for (let i = 1; i < ghost.path.length; i++) {
-          ctx.lineTo(ghost.path[i].x, ghost.path[i].y);
+    for (const k of klines) {
+      const open = parseFloat(k[1]);
+      const high = parseFloat(k[2]);
+      const low = parseFloat(k[3]);
+      const close = parseFloat(k[4]);
+      const baseTime = Math.floor(k[0] / 1000);
+      
+      // Interpolate for smoother chart (6 points per minute)
+      for (let j = 0; j < 6; j++) {
+        const t = baseTime + j * 10;
+        if (t > now) break;
+        
+        const progress = j / 6;
+        let price;
+        if (progress < 0.25) {
+          price = open + (high - open) * (progress / 0.25);
+        } else if (progress < 0.6) {
+          price = high - (high - low) * ((progress - 0.25) / 0.35);
+        } else {
+          price = low + (close - low) * ((progress - 0.6) / 0.4);
         }
-        ctx.stroke();
+        
+        data.push({ time: t, value: price });
       }
     }
     
-    // Anchor
-    if (state.mode === 'drawing') {
-      const pulse = Math.sin(Date.now() / 200) * 0.3 + 0.7;
-      ctx.beginPath();
-      ctx.fillStyle = `rgba(247, 147, 26, ${0.2 * pulse})`;
-      ctx.arc(anchor.x, anchor.y, 25 * dpr, 0, Math.PI * 2);
-      ctx.fill();
-      
-      ctx.beginPath();
-      ctx.fillStyle = '#f7931a';
-      ctx.arc(anchor.x, anchor.y, 5 * dpr, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    // Dedupe and sort
+    const seen = new Set();
+    const uniqueData = data.filter(d => {
+      if (seen.has(d.time)) return false;
+      seen.add(d.time);
+      return true;
+    }).sort((a, b) => a.time - b.time);
     
-    // User's line
-    if (state.drawPath.length > 0) {
-      // Leash
-      ctx.beginPath();
-      ctx.strokeStyle = 'rgba(247, 147, 26, 0.4)';
-      ctx.lineWidth = 2 * dpr;
-      ctx.setLineDash([6 * dpr, 6 * dpr]);
-      ctx.moveTo(anchor.x, anchor.y);
-      ctx.lineTo(state.drawPath[0].x, state.drawPath[0].y);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      
-      if (state.drawPath.length > 1) {
-        // Glow
-        ctx.beginPath();
-        ctx.strokeStyle = 'rgba(0, 210, 106, 0.2)';
-        ctx.lineWidth = 14 * dpr;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.moveTo(state.drawPath[0].x, state.drawPath[0].y);
-        for (let i = 1; i < state.drawPath.length; i++) {
-          ctx.lineTo(state.drawPath[i].x, state.drawPath[i].y);
-        }
-        ctx.stroke();
+    state.priceHistory = uniqueData;
+    state.series.setData(uniqueData);
+    
+    if (uniqueData.length > 0) {
+      const lastPrice = uniqueData[uniqueData.length - 1].value;
+      state.currentPrice = lastPrice;
+      state.displayPrice = lastPrice;
+      state.targetPrice = lastPrice;
+    } else {
+      throw new Error('No valid data points');
+    }
+  }
+
+  function connectWebSocket() {
+    state.ws = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@trade');
+    
+    state.ws.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        const price = parseFloat(data.p);
         
-        // Main line
-        ctx.beginPath();
-        ctx.strokeStyle = '#00d26a';
-        ctx.lineWidth = 3 * dpr;
-        ctx.moveTo(state.drawPath[0].x, state.drawPath[0].y);
-        for (let i = 1; i < state.drawPath.length; i++) {
-          ctx.lineTo(state.drawPath[i].x, state.drawPath[i].y);
-        }
-        ctx.stroke();
+        state.priceBuffer.push(price);
+        if (state.priceBuffer.length > 8) state.priceBuffer.shift();
         
-        // End dot
-        const end = state.drawPath[state.drawPath.length - 1];
-        ctx.beginPath();
-        ctx.fillStyle = '#00d26a';
-        ctx.arc(end.x, end.y, 6 * dpr, 0, Math.PI * 2);
-        ctx.fill();
-      }
+        state.targetPrice = state.priceBuffer.reduce((a, b) => a + b, 0) / state.priceBuffer.length;
+      } catch (err) {}
+    };
+    
+    state.ws.onclose = () => setTimeout(connectWebSocket, 2000);
+  }
+
+  // ==========================================
+  // ANIMATION LOOP
+  // ==========================================
+  function animationLoop(ts) {
+    // Smooth price lerp (only if we have valid prices)
+    if (state.targetPrice > 0) {
+      state.displayPrice += (state.targetPrice - state.displayPrice) * 0.1;
+      state.currentPrice = state.displayPrice;
     }
     
-    // Ghost count indicator
-    if (state.ghostPredictions.length > 0) {
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-      ctx.font = `${12 * dpr}px JetBrains Mono`;
-      ctx.fillText(`${state.ghostPredictions.length} other predictions`, 10 * dpr, 20 * dpr);
+    updatePriceDisplay();
+    updateChart(ts);
+    updateTimer();
+    updateStandings();
+    
+    requestAnimationFrame(animationLoop);
+  }
+
+  function updateChart(ts) {
+    // Skip if no valid price yet
+    if (!state.displayPrice || state.displayPrice <= 0) return;
+    // Throttle updates to 200ms
+    if (ts - state.lastChartUpdate < 200) return;
+    state.lastChartUpdate = ts;
+    
+    const now = Math.floor(Date.now() / 1000);
+    const last = state.priceHistory[state.priceHistory.length - 1];
+    
+    if (!last || now > last.time) {
+      state.priceHistory.push({ time: now, value: state.displayPrice });
+      state.series.update({ time: now, value: state.displayPrice });
+      if (state.priceHistory.length > 500) state.priceHistory.shift();
+    } else {
+      state.series.update({ time: last.time, value: state.displayPrice });
     }
   }
 
-  // ============================================
-  // RENDERING
-  // ============================================
-  function renderResults() {
-    if (!DOM.resultsList) return;
+  function updatePriceDisplay() {
+    if (!DOM.price) return;
+    DOM.price.textContent = formatPrice(state.displayPrice);
     
-    DOM.resultsList.innerHTML = state.roundResults.slice(0, 5).map((p, i) => `
-      <div class="result-item ${p.user_id === state.userId ? 'is-you' : ''}">
-        <span class="result-rank">${p.rank || i + 1}</span>
-        <span class="result-name">${p.users?.nickname || 'Player'}</span>
-        <span class="result-target">${formatPrice(p.target_price)}</span>
-        <span class="result-accuracy">${p.accuracy?.toFixed(1) || '0.0'}%</span>
-      </div>
-    `).join('');
-    
-    // Show user's result
-    const myResult = state.roundResults.find(p => p.user_id === state.userId);
-    if (myResult && DOM.myResult) {
-      DOM.myResult.innerHTML = `
-        <div class="my-result-rank">#${myResult.rank || '?'}</div>
-        <div class="my-result-accuracy">${myResult.accuracy?.toFixed(1) || '0.0'}%</div>
-      `;
+    if (state.roundStartPrice > 0) {
+      const change = ((state.displayPrice - state.roundStartPrice) / state.roundStartPrice) * 100;
+      DOM.change.textContent = (change >= 0 ? '+' : '') + change.toFixed(2) + '%';
+      DOM.change.className = 'price-change ' + (change >= 0 ? 'up' : 'down');
     }
   }
 
-  function renderLeaderboard() {
-    if (!DOM.leaderboard) return;
+  // ==========================================
+  // PREDICTIONS - Minimal Y-axis labels
+  // ==========================================
+  function addPrediction(pred) {
+    // Remove if exists
+    removePrediction(pred.id);
     
-    DOM.leaderboard.innerHTML = state.leaderboard.map((u, i) => `
-      <div class="leaderboard-item ${u.user_id === state.userId ? 'is-you' : ''}">
-        <span class="lb-rank ${i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : ''}">${i + 1}</span>
-        <div class="lb-avatar">${u.nickname?.[0] || '?'}</div>
-        <div class="lb-info">
-          <div class="lb-name">${u.nickname || 'Player'}</div>
-          <div class="lb-predictions">${u.total_predictions} predictions</div>
-        </div>
-        <span class="lb-accuracy">${u.avg_accuracy?.toFixed(1) || '0.0'}%</span>
-      </div>
-    `).join('');
-  }
-
-  function initMockLeaderboard() {
-    const names = ['CryptoKing', 'SatoshiV', 'MoonLambo', 'WAGMI', 'Diamond', 'ChartPro'];
-    state.leaderboard = names.map((name, i) => ({
-      nickname: name,
-      total_predictions: Math.floor(80 + Math.random() * 200),
-      avg_accuracy: parseFloat((96 - i * 3.5 + Math.random() * 2).toFixed(1)),
-    }));
-    renderLeaderboard();
-  }
-
-  // ============================================
-  // EVENT LISTENERS
-  // ============================================
-  function setupEventListeners() {
-    DOM.btnDraw?.addEventListener('click', () => setMode('drawing'));
-    DOM.btnCancel?.addEventListener('click', () => {
-      state.drawPath = [];
-      state.targetPrice = null;
-      setMode('idle');
+    // Ghost line - NO axis label (axisLabelVisible: false)
+    const isMe = pred.id === 'me';
+    pred.line = state.series.createPriceLine({
+      price: pred.price,
+      color: hexToRgba(pred.color, isMe ? 0.6 : 0.15),
+      lineWidth: isMe ? 2 : 1,
+      lineStyle: isMe ? 0 : 2, // Solid for me, dashed for others
+      axisLabelVisible: false, // KEY: No label clutter!
+      title: '',
     });
+    
+    state.predictions.push(pred);
+    
+    // If it's my prediction, add special labeled line
+    if (isMe) {
+      updateMyPriceLine(pred.price);
+    }
+    
+    DOM.playerCount.textContent = state.predictions.length;
+  }
+
+  function removePrediction(id) {
+    const idx = state.predictions.findIndex(p => p.id === id);
+    if (idx !== -1) {
+      const pred = state.predictions[idx];
+      if (pred.line) state.series.removePriceLine(pred.line);
+      state.predictions.splice(idx, 1);
+    }
+  }
+
+  function clearAllPredictions() {
+    for (const pred of state.predictions) {
+      if (pred.line) state.series.removePriceLine(pred.line);
+    }
+    state.predictions = [];
+    state.myPrediction = null;
+    
+    if (state.myPriceLine) {
+      state.series.removePriceLine(state.myPriceLine);
+      state.myPriceLine = null;
+    }
+    if (state.leaderPriceLine) {
+      state.series.removePriceLine(state.leaderPriceLine);
+      state.leaderPriceLine = null;
+    }
+    state.currentLeaderId = null;
+  }
+
+  // Only YOUR prediction gets an axis label
+  function updateMyPriceLine(price) {
+    if (state.myPriceLine) {
+      state.series.removePriceLine(state.myPriceLine);
+    }
+    state.myPriceLine = state.series.createPriceLine({
+      price: price,
+      color: '#22c55e',
+      lineWidth: 2,
+      lineStyle: 0,
+      axisLabelVisible: true,
+      title: '→ YOU',
+    });
+  }
+
+  // Only LEADER gets an axis label
+  function updateLeaderPriceLine(pred) {
+    if (state.leaderPriceLine) {
+      state.series.removePriceLine(state.leaderPriceLine);
+    }
+    state.leaderPriceLine = state.series.createPriceLine({
+      price: pred.price,
+      color: pred.id === 'me' ? '#22c55e' : pred.color,
+      lineWidth: 3,
+      lineStyle: 0,
+      axisLabelVisible: true,
+      title: '👑 ' + (pred.id === 'me' ? 'YOU' : pred.nickname),
+    });
+    state.currentLeaderId = pred.id;
+  }
+
+  function hexToRgba(hex, alpha) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+
+  // ==========================================
+  // STANDINGS - Sidebar list instead of Y-axis
+  // ==========================================
+  function updateStandings() {
+    if (state.predictions.length === 0 || state.currentPrice <= 0) return;
+    
+    // Sort by distance to current price
+    const sorted = [...state.predictions].map(p => ({
+      ...p,
+      diff: Math.abs(p.price - state.currentPrice)
+    })).sort((a, b) => a.diff - b.diff);
+    
+    // Update leader line if changed
+    const leader = sorted[0];
+    if (leader && leader.id !== state.currentLeaderId) {
+      updateLeaderPriceLine(leader);
+    }
+    
+    // Render standings list
+    DOM.standingsList.innerHTML = sorted.slice(0, 10).map((p, i) => {
+      const isLeader = i === 0;
+      const isYou = p.id === 'me';
+      const classes = ['standing-item'];
+      if (isLeader) classes.push('is-leader');
+      if (isYou) classes.push('is-you');
+      
+      return `
+        <div class="${classes.join(' ')}">
+          <span class="standing-rank">${isLeader ? '👑' : (i + 1)}</span>
+          <span class="standing-color" style="background:${p.color}"></span>
+          <span class="standing-name">${isYou ? 'You' : p.nickname}</span>
+          <span class="standing-diff">$${p.diff.toFixed(0)}</span>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // ==========================================
+  // ROUND
+  // ==========================================
+  function startRound() {
+    state.roundStartTime = Date.now();
+    state.roundEndTime = state.roundStartTime + (ROUND_DURATION * 1000);
+    state.roundStatus = 'active';
+    state.roundStartPrice = state.currentPrice || state.displayPrice;
+    state.myPrediction = null;
+    
+    // Reset UI
+    DOM.inputMode?.classList.remove('hidden');
+    DOM.lockedMode?.classList.add('hidden');
+    DOM.resultsSection?.classList.add('hidden');
+    
+    if (DOM.priceInput) {
+      DOM.priceInput.value = '';
+      DOM.priceInput.placeholder = state.currentPrice > 0 ? Math.round(state.currentPrice).toString() : '89650';
+    }
+    if (DOM.btnSubmit) {
+      DOM.btnSubmit.textContent = 'Lock In';
+      DOM.btnSubmit.disabled = false;
+    }
+    
+    setTimeout(endRound, ROUND_DURATION * 1000);
+  }
+
+  function endRound() {
+    state.roundStatus = 'ended';
+    
+    const finalPrice = state.currentPrice;
+    let winner = null;
+    let minDiff = Infinity;
+    
+    for (const p of state.predictions) {
+      const diff = Math.abs(p.price - finalPrice);
+      if (diff < minDiff) {
+        minDiff = diff;
+        winner = p;
+      }
+    }
+    
+    if (winner) {
+      const accuracy = Math.max(0, 100 - (minDiff / finalPrice * 100)).toFixed(2);
+      
+      DOM.winnerName.textContent = winner.id === 'me' ? 'You!' : winner.nickname;
+      DOM.winnerName.style.color = winner.color;
+      DOM.winnerPrice.textContent = formatPrice(winner.price);
+      DOM.finalPrice.textContent = formatPrice(finalPrice);
+      DOM.winnerAccuracy.textContent = accuracy + '%';
+      
+      DOM.inputMode?.classList.add('hidden');
+      DOM.lockedMode?.classList.add('hidden');
+      DOM.resultsSection?.classList.remove('hidden');
+      
+      if (winner.id === 'me') {
+        triggerConfetti();
+      }
+    }
+    
+    setTimeout(() => {
+      clearAllPredictions();
+      startRound();
+      setTimeout(addSimulatedPlayers, 300);
+    }, 5000);
+  }
+
+  function updateTimer() {
+    const remaining = Math.max(0, Math.ceil((state.roundEndTime - Date.now()) / 1000));
+    const elapsed = Date.now() - state.roundStartTime;
+    const progress = Math.min(100, (elapsed / (ROUND_DURATION * 1000)) * 100);
+    
+    if (DOM.timer) {
+      DOM.timer.textContent = remaining;
+      DOM.timer.classList.toggle('urgent', remaining <= 15 && remaining > 5);
+      DOM.timer.classList.toggle('critical', remaining <= 5);
+    }
+    
+    if (DOM.progress) {
+      DOM.progress.style.width = progress + '%';
+      DOM.progress.classList.toggle('urgent', remaining <= 15 && remaining > 5);
+      DOM.progress.classList.toggle('critical', remaining <= 5);
+    }
+  }
+
+  // ==========================================
+  // SIMULATED PLAYERS
+  // ==========================================
+  function addSimulatedPlayers() {
+    const price = state.currentPrice || 89000;
+    
+    const players = [
+      { name: 'CryptoKing', color: '#ef4444' },
+      { name: 'SatoshiV', color: '#8b5cf6' },
+      { name: 'MoonLambo', color: '#06b6d4' },
+      { name: 'WAGMI', color: '#f59e0b' },
+      { name: 'Diamond', color: '#ec4899' },
+      { name: 'BTCMaxi', color: '#10b981' },
+      { name: 'Degen420', color: '#6366f1' },
+      { name: 'Whale', color: '#14b8a6' },
+      { name: 'ChartWiz', color: '#f97316' },
+      { name: 'PumpIt', color: '#a855f7' },
+      { name: 'HodlGang', color: '#22c55e' },
+      { name: 'BearHunter', color: '#e11d48' },
+      { name: 'Saylor', color: '#0ea5e9' },
+      { name: 'SilkRoad', color: '#84cc16' },
+      { name: 'FOMO', color: '#d946ef' },
+      { name: 'RektCap', color: '#fb923c' },
+      { name: 'CZ_Fan', color: '#fbbf24' },
+      { name: 'VitalikJr', color: '#38bdf8' },
+      { name: 'GigaChad', color: '#c084fc' },
+      { name: 'NFA_Andy', color: '#4ade80' },
+    ];
+    
+    players.forEach((p, i) => {
+      setTimeout(() => {
+        if (state.roundStatus !== 'active') return;
+        
+        const variance = price * 0.001;
+        const offset = (Math.random() - 0.5) * 2 * variance;
+        
+        addPrediction({
+          id: 'bot_' + i,
+          nickname: p.name,
+          price: Math.round(price + offset),
+          color: p.color,
+        });
+      }, i * 100);
+    });
+  }
+
+  // ==========================================
+  // USER INPUT
+  // ==========================================
+  function setupEventListeners() {
     DOM.btnSubmit?.addEventListener('click', submitPrediction);
+    DOM.priceInput?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') submitPrediction();
+    });
+    DOM.priceInput?.addEventListener('input', e => {
+      e.target.value = e.target.value.replace(/[^0-9]/g, '');
+    });
+    DOM.priceInput?.addEventListener('focus', () => {
+      if (!DOM.priceInput.value && state.currentPrice > 0) {
+        DOM.priceInput.value = Math.round(state.currentPrice).toString();
+        DOM.priceInput.select();
+      }
+    });
   }
 
-  // ============================================
+  function submitPrediction() {
+    if (state.roundStatus !== 'active') return;
+    
+    const price = parseFloat(DOM.priceInput?.value);
+    if (isNaN(price) || price <= 0) return;
+    
+    if (state.myPrediction) {
+      removePrediction('me');
+    }
+    
+    state.myPrediction = {
+      id: 'me',
+      nickname: 'You',
+      price: price,
+      color: '#22c55e',
+    };
+    
+    addPrediction(state.myPrediction);
+    
+    // Switch to locked mode
+    DOM.inputMode?.classList.add('hidden');
+    DOM.lockedMode?.classList.remove('hidden');
+    DOM.lockedValue.textContent = formatPrice(price);
+  }
+
+  // ==========================================
+  // CONFETTI
+  // ==========================================
+  function triggerConfetti() {
+    if (!DOM.confetti) return;
+    DOM.confetti.innerHTML = '';
+    DOM.confetti.classList.add('active');
+    
+    const colors = ['#f7931a', '#22c55e', '#ef4444', '#8b5cf6', '#f59e0b'];
+    for (let i = 0; i < 100; i++) {
+      const piece = document.createElement('div');
+      piece.className = 'confetti-piece';
+      piece.style.left = Math.random() * 100 + '%';
+      piece.style.background = colors[Math.floor(Math.random() * colors.length)];
+      piece.style.animationDelay = Math.random() * 0.5 + 's';
+      DOM.confetti.appendChild(piece);
+    }
+    
+    setTimeout(() => DOM.confetti.classList.remove('active'), 3000);
+  }
+
+  // ==========================================
   // UTILS
-  // ============================================
+  // ==========================================
   function formatPrice(p) {
-    if (!p || isNaN(p)) return '$--,---.--';
-    return '$' + p.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (!p || isNaN(p)) return '$--,---';
+    return '$' + Math.round(p).toLocaleString();
   }
 
-  // ============================================
+  // ==========================================
   // START
-  // ============================================
+  // ==========================================
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {

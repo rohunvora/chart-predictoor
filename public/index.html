@@ -3,17 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Predictoor | Where will BTC go?</title>
+  <title>Predictoor | Where will BTC close?</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
-  
-  <!-- OG Tags -->
-  <meta property="og:title" content="Predictoor - Can you predict BTC?">
-  <meta property="og:description" content="Draw your prediction. Compete live. See who's the best crypto predictor.">
-  <meta property="og:type" content="website">
-  <meta name="twitter:card" content="summary_large_image">
 </head>
 <body>
   <div id="app">
@@ -23,100 +17,109 @@
         <span class="brand-icon">📈</span>
         <span class="brand-name">Predictoor</span>
       </div>
-      <div class="ticker">
-        <span class="ticker-symbol">BTC/USD</span>
-        <span class="ticker-arrow" id="ticker-arrow"></span>
-        <span class="ticker-price" id="ticker-price">$--,---.--</span>
-        <span class="ticker-change up" id="ticker-change">+0.00%</span>
+      <div class="price-display">
+        <span class="price-label">BTC/USD</span>
+        <span class="current-price" id="current-price">$--,---.--</span>
+        <span class="price-change up" id="price-change">+0.00%</span>
       </div>
     </header>
 
-    <!-- Main Content -->
+    <!-- Main Layout: Fixed grid -->
     <main class="main">
-      <!-- Chart Area -->
-      <section class="chart-section">
-        <!-- Round Info Bar -->
-        <div class="round-bar">
-          <div class="round-info">
-            <span class="round-label">Round</span>
-            <span class="round-number" id="round-number">#---</span>
+      <!-- Left: Chart Area -->
+      <div class="chart-area">
+        <!-- Timer Bar -->
+        <div class="timer-bar">
+          <div class="timer-left">
+            <span class="timer-value" id="round-timer">60</span>
+            <span class="timer-unit">sec</span>
           </div>
-          <div class="round-timer-wrap">
-            <span class="timer-label">Ends in</span>
-            <span class="round-timer" id="round-timer">--s</span>
+          <div class="timer-progress">
+            <div class="progress-track">
+              <div class="progress-fill" id="progress-fill"></div>
+            </div>
           </div>
-          <div class="player-count">
-            <span class="player-icon">👥</span>
-            <span id="player-count">-- players</span>
+          <div class="timer-right">
+            <span class="player-count" id="player-count">0</span>
+            <span class="player-label">players</span>
           </div>
         </div>
         
-        <!-- Chart + Canvas -->
-        <div class="chart-wrap">
-          <div id="chart-container"></div>
-          <canvas id="drawing-canvas"></canvas>
+        <!-- Chart Container - FIXED SIZE -->
+        <div class="chart-container">
+          <div id="chart-wrapper"></div>
         </div>
+      </div>
 
-        <!-- Control Panels (overlaid on bottom) -->
-        <div class="control-layer">
-          <!-- Waiting Mode -->
-          <div id="waiting-mode" class="control-panel waiting-panel">
-            <div class="panel-content">
-              <div class="waiting-text">⏳ Waiting for next round...</div>
-            </div>
-          </div>
-          
-          <!-- Drawing Mode -->
-          <div id="drawing-mode" class="control-panel drawing-panel hidden">
-            <div class="panel-content">
-              <div class="target-section">
-                <span class="target-label">Your Target</span>
-                <span class="target-price empty" id="target-price">Draw on chart</span>
-                <span class="target-diff" id="target-diff"></span>
-              </div>
-              <div class="action-buttons">
-                <button id="btn-cancel" class="btn btn-cancel">Cancel</button>
-                <button id="btn-submit" class="btn btn-submit">Lock In 🔒</button>
-              </div>
-            </div>
-          </div>
-          
-          <!-- Submitted Mode -->
-          <div id="submitted-mode" class="control-panel submitted-panel hidden">
-            <div class="panel-content">
-              <div class="submitted-check">✓</div>
-              <span>Prediction locked! Waiting for results...</span>
-            </div>
-          </div>
-          
-          <!-- Results Mode -->
-          <div id="results-mode" class="control-panel results-panel hidden">
-            <div class="panel-content">
-              <h3 class="results-title">Round Results</h3>
-              <div class="my-result" id="my-result"></div>
-              <div class="results-list" id="results-list"></div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Sidebar -->
+      <!-- Right: Sidebar -->
       <aside class="sidebar">
-        <div class="sidebar-section">
-          <h2 class="section-title">🏆 Leaderboard</h2>
-          <div class="leaderboard" id="leaderboard"></div>
+        <!-- Your Prediction -->
+        <div class="sidebar-section prediction-section">
+          <h2 class="section-title">Your Prediction</h2>
+          
+          <div id="input-mode">
+            <div class="price-input-wrap">
+              <span class="input-prefix">$</span>
+              <input 
+                type="text" 
+                id="price-input" 
+                class="price-input" 
+                placeholder="89,650"
+                inputmode="decimal"
+                autocomplete="off"
+              >
+            </div>
+            <button id="btn-submit" class="btn-submit">Lock In</button>
+          </div>
+          
+          <div id="locked-mode" class="hidden">
+            <div class="locked-price">
+              <span class="locked-label">Your target:</span>
+              <span class="locked-value" id="locked-value">$89,650</span>
+            </div>
+            <div class="locked-status">✓ Locked in</div>
+          </div>
         </div>
-        
-        <div class="sidebar-section how-to-play">
-          <h2 class="section-title">How to Play</h2>
-          <ol class="how-list">
-            <li>When round starts, draw where BTC will be in 60s</li>
-            <li>Lock in before time runs out</li>
-            <li>See how you rank against others!</li>
-          </ol>
+
+        <!-- Live Standings -->
+        <div class="sidebar-section standings-section">
+          <h2 class="section-title">
+            <span>Live Standings</span>
+            <span class="standings-subtitle">closest to price wins</span>
+          </h2>
+          <div class="standings-list" id="standings-list">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+
+        <!-- Results (shown at round end) -->
+        <div id="results-section" class="sidebar-section results-section hidden">
+          <div class="results-header">
+            <span class="trophy">🏆</span>
+            <span class="results-title">Round Complete!</span>
+          </div>
+          <div class="winner-info">
+            <span class="winner-label">Winner</span>
+            <span class="winner-name" id="winner-name">---</span>
+            <span class="winner-accuracy" id="winner-accuracy">99.9%</span>
+          </div>
+          <div class="results-prices">
+            <div class="result-item">
+              <span>Predicted:</span>
+              <span id="winner-price">$89,650</span>
+            </div>
+            <div class="result-item">
+              <span>Actual:</span>
+              <span id="final-price">$89,652</span>
+            </div>
+          </div>
+          <div class="next-round">Next round in 5s...</div>
         </div>
       </aside>
     </main>
+    
+    <!-- Confetti -->
+    <div id="confetti" class="confetti"></div>
   </div>
 
   <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
