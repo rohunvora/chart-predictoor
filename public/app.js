@@ -1,778 +1,926 @@
-// ============================================
-// Chart Predictoor - Main Application
-// ============================================
+// Chart Predictoor - Production Multiplayer Version
+// With Supabase real-time sync, ghost lines, and synchronized rounds
 
 (function() {
   'use strict';
 
   // ============================================
-  // State
+  // CONFIGURATION
+  // ============================================
+  const CONFIG = {
+    // Supabase - Replace with your project details
+    SUPABASE_URL: 'YOUR_SUPABASE_URL',
+    SUPABASE_ANON_KEY: 'YOUR_SUPABASE_ANON_KEY',
+    
+    // Feature flags
+    MULTIPLAYER_ENABLED: false, // Set to true when Supabase is configured
+    
+    // Timing
+    ROUND_DURATION: 60, // seconds
+    LOCK_BEFORE_END: 5, // seconds before end when submissions lock
+  };
+
+  // Check if Supabase is configured
+  const isMultiplayer = CONFIG.MULTIPLAYER_ENABLED && 
+    CONFIG.SUPABASE_URL !== 'YOUR_SUPABASE_URL';
+
+  // ============================================
+  // STATE
   // ============================================
   const state = {
-    nickname: null,
-    chart: null,
-    lineSeries: null,
-    priceData: [],
-    currentPrice: 0,
-    startPrice: 0,
-    isDrawing: false,
-    isDrawingMode: false,
-    drawingPoints: [],
-    prediction: null,
-    predictionStartTime: null,
-    predictionDuration: 60000, // 60 seconds
-    ws: null,
-    leaderboard: []
-  };
-
-  // ============================================
-  // DOM Elements
-  // ============================================
-  const elements = {
-    nicknameModal: document.getElementById('nickname-modal'),
-    nicknameInput: document.getElementById('nickname-input'),
-    nicknameSubmit: document.getElementById('nickname-submit'),
-    app: document.getElementById('app'),
-    currentPrice: document.getElementById('current-price'),
-    priceChange: document.getElementById('price-change'),
-    userNickname: document.getElementById('user-nickname'),
-    userAvatar: document.getElementById('user-avatar'),
-    chartContainer: document.getElementById('chart-container'),
-    drawingCanvas: document.getElementById('drawing-canvas'),
-    drawingControls: document.getElementById('drawing-controls'),
-    predictBtn: document.getElementById('predict-btn'),
-    clearDrawing: document.getElementById('clear-drawing'),
-    submitPrediction: document.getElementById('submit-prediction'),
-    leaderboard: document.getElementById('leaderboard'),
-    activePrediction: document.getElementById('active-prediction'),
-    predictionAccuracy: document.getElementById('prediction-accuracy'),
-    predictionCountdown: document.getElementById('prediction-countdown')
-  };
-
-  // ============================================
-  // Mock Leaderboard Data
-  // ============================================
-  const mockUsers = [
-    { id: 'u1', name: 'CryptoKing', accuracy: 94.2 },
-    { id: 'u2', name: 'BitWizard', accuracy: 91.8 },
-    { id: 'u3', name: 'MoonShot', accuracy: 89.5 },
-    { id: 'u4', name: 'DiamondHands', accuracy: 87.3 },
-    { id: 'u5', name: 'Satoshi Jr', accuracy: 85.1 },
-    { id: 'u6', name: 'HODLer', accuracy: 82.7 },
-    { id: 'u7', name: 'BullRunner', accuracy: 79.4 },
-    { id: 'u8', name: 'ChartMaster', accuracy: 76.2 }
-  ];
-
-  // ============================================
-  // Initialization
-  // ============================================
-  function init() {
-    checkNickname();
-    setupEventListeners();
-  }
-
-  function checkNickname() {
-    const saved = localStorage.getItem('predictoor_nickname');
-    if (saved) {
-      state.nickname = saved;
-      showApp();
-    }
-  }
-
-  function showApp() {
-    elements.nicknameModal.classList.add('hidden');
-    elements.app.classList.remove('hidden');
-    elements.userNickname.textContent = state.nickname;
-    elements.userAvatar.textContent = state.nickname.charAt(0).toUpperCase();
+    // Supabase
+    supabase: null,
+    userId: null,
+    sessionToken: null,
     
+    // Chart
+    chart: null,
+    series: null,
+    ws: null,
+    
+    // Price
+    currentPrice: 0,
+    displayPrice: 0,
+    previousPrice: 0,
+    startPrice: 0,
+    lastTime: 0,
+    
+    // Round (synchronized)
+    currentRound: null,
+    roundEndTime: null,
+    roundStatus: 'waiting', // waiting, active, locked, results
+    
+    // Prediction
+    mode: 'idle', // idle, drawing, submitted, results
+    targetPrice: null,
+    myPrediction: null,
+    
+    // Ghost lines (other players)
+    ghostPredictions: [],
+    
+    // Drawing
+    isDrawing: false,
+    drawPath: [],
+    
+    // Leaderboard
+    leaderboard: [],
+    roundResults: [],
+    
+    // UI
+    playerCount: 0,
+  };
+
+  const DOM = {};
+
+  // ============================================
+  // INITIALIZATION
+  // ============================================
+  async function init() {
+    cacheDom();
     initChart();
     initCanvas();
-    connectWebSocket();
-    updateLeaderboard();
-  }
-
-  // ============================================
-  // Event Listeners
-  // ============================================
-  function setupEventListeners() {
-    // Nickname submission
-    elements.nicknameSubmit.addEventListener('click', handleNicknameSubmit);
-    elements.nicknameInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') handleNicknameSubmit();
-    });
-
-    // Predict button
-    elements.predictBtn.addEventListener('click', enterDrawingMode);
-
-    // Drawing controls
-    elements.clearDrawing.addEventListener('click', clearDrawing);
-    elements.submitPrediction.addEventListener('click', submitPrediction);
-
-    // Window resize
-    window.addEventListener('resize', debounce(handleResize, 250));
-  }
-
-  function handleNicknameSubmit() {
-    const nickname = elements.nicknameInput.value.trim();
-    if (nickname.length >= 2) {
-      state.nickname = nickname;
-      localStorage.setItem('predictoor_nickname', nickname);
-      showApp();
+    setupEventListeners();
+    
+    // Load historical data and start price feed
+    await loadHistoricalData();
+    connectPriceFeed();
+    
+    if (isMultiplayer) {
+      await initSupabase();
+      await joinGame();
+      startRoundSync();
     } else {
-      elements.nicknameInput.style.borderColor = '#f44336';
-      setTimeout(() => {
-        elements.nicknameInput.style.borderColor = '';
-      }, 1000);
+      // Single player mode - use mock data
+      initMockLeaderboard();
+      startLocalRound();
+    }
+    
+    startAnimationLoop();
+  }
+
+  function cacheDom() {
+    DOM.tickerPrice = document.getElementById('ticker-price');
+    DOM.tickerChange = document.getElementById('ticker-change');
+    DOM.tickerArrow = document.getElementById('ticker-arrow');
+    DOM.lastUpdate = document.getElementById('last-update');
+    DOM.chartContainer = document.getElementById('chart-container');
+    DOM.canvas = document.getElementById('drawing-canvas');
+    
+    // Round info
+    DOM.roundInfo = document.getElementById('round-info');
+    DOM.roundNumber = document.getElementById('round-number');
+    DOM.roundTimer = document.getElementById('round-timer');
+    DOM.playerCount = document.getElementById('player-count');
+    
+    // Panels
+    DOM.waitingMode = document.getElementById('waiting-mode');
+    DOM.drawingMode = document.getElementById('drawing-mode');
+    DOM.submittedMode = document.getElementById('submitted-mode');
+    DOM.resultsMode = document.getElementById('results-mode');
+    
+    // Drawing
+    DOM.targetPrice = document.getElementById('target-price');
+    DOM.targetDiff = document.getElementById('target-diff');
+    DOM.btnDraw = document.getElementById('btn-draw');
+    DOM.btnCancel = document.getElementById('btn-cancel');
+    DOM.btnSubmit = document.getElementById('btn-submit');
+    
+    // Results
+    DOM.resultsList = document.getElementById('results-list');
+    DOM.myResult = document.getElementById('my-result');
+    
+    // Leaderboard
+    DOM.leaderboard = document.getElementById('leaderboard');
+  }
+
+  // ============================================
+  // SUPABASE INTEGRATION
+  // ============================================
+  async function initSupabase() {
+    // Dynamic import for Supabase
+    const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
+    state.supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+    
+    // Get or create session token
+    state.sessionToken = localStorage.getItem('predictoor_session');
+    if (!state.sessionToken) {
+      state.sessionToken = crypto.randomUUID();
+      localStorage.setItem('predictoor_session', state.sessionToken);
     }
   }
 
-  // ============================================
-  // Chart Setup (Lightweight Charts)
-  // ============================================
-  function initChart() {
-    const container = elements.chartContainer;
-    
-    state.chart = LightweightCharts.createChart(container, {
-      width: container.clientWidth,
-      height: container.clientHeight,
-      layout: {
-        background: { type: 'solid', color: '#ffffff' },
-        textColor: '#333333',
-        fontFamily: "'Space Grotesk', sans-serif"
-      },
-      grid: {
-        vertLines: { color: 'rgba(0, 0, 0, 0.04)' },
-        horzLines: { color: 'rgba(0, 0, 0, 0.04)' }
-      },
-      crosshair: {
-        mode: LightweightCharts.CrosshairMode.Normal,
-        vertLine: {
-          color: 'rgba(124, 179, 66, 0.4)',
-          width: 1,
-          style: LightweightCharts.LineStyle.Dashed
-        },
-        horzLine: {
-          color: 'rgba(124, 179, 66, 0.4)',
-          width: 1,
-          style: LightweightCharts.LineStyle.Dashed
-        }
-      },
-      rightPriceScale: {
-        borderColor: 'rgba(0, 0, 0, 0.1)',
-        scaleMargins: { top: 0.1, bottom: 0.1 }
-      },
-      timeScale: {
-        borderColor: 'rgba(0, 0, 0, 0.1)',
-        timeVisible: true,
-        secondsVisible: true
-      },
-      handleScroll: false,
-      handleScale: false
-    });
-
-    state.lineSeries = state.chart.addLineSeries({
-      color: '#c62828',
-      lineWidth: 2,
-      crosshairMarkerVisible: true,
-      crosshairMarkerRadius: 4,
-      crosshairMarkerBorderColor: '#c62828',
-      crosshairMarkerBackgroundColor: '#ffffff',
-      priceLineVisible: true,
-      priceLineWidth: 1,
-      priceLineColor: '#c62828',
-      priceLineStyle: LightweightCharts.LineStyle.Dashed
-    });
-
-    // Generate initial mock data
-    generateInitialData();
-  }
-
-  function generateInitialData() {
-    const now = Math.floor(Date.now() / 1000);
-    const basePrice = 98000 + Math.random() * 2000;
-    state.startPrice = basePrice;
-    
-    // Generate 60 seconds of historical data
-    for (let i = 60; i >= 0; i--) {
-      const time = now - i;
-      const noise = (Math.random() - 0.5) * 100;
-      const trend = Math.sin(i / 10) * 50;
-      const price = basePrice + noise + trend;
-      
-      state.priceData.push({ time, value: price });
-    }
-    
-    state.currentPrice = state.priceData[state.priceData.length - 1].value;
-    state.lineSeries.setData(state.priceData);
-    updatePriceDisplay();
-  }
-
-  function handleResize() {
-    if (state.chart) {
-      const container = elements.chartContainer;
-      state.chart.resize(container.clientWidth, container.clientHeight);
-      resizeCanvas();
-    }
-  }
-
-  // ============================================
-  // WebSocket Connection (Binance)
-  // ============================================
-  function connectWebSocket() {
-    // Use Binance WebSocket for real BTC price
-    const wsUrl = 'wss://stream.binance.com:9443/ws/btcusdt@trade';
+  async function joinGame() {
+    if (!state.supabase) return;
     
     try {
-      state.ws = new WebSocket(wsUrl);
+      // Get or create user
+      const { data, error } = await state.supabase.rpc('get_or_create_user', {
+        p_session_token: state.sessionToken,
+        p_nickname: localStorage.getItem('predictoor_nickname')
+      });
       
-      state.ws.onopen = () => {
-        console.log('Connected to Binance WebSocket');
-      };
+      if (error) throw error;
+      state.userId = data;
       
-      state.ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        handlePriceUpdate(parseFloat(data.p));
-      };
+      // Subscribe to current round
+      subscribeToRound();
       
-      state.ws.onerror = (error) => {
-        console.log('WebSocket error, falling back to mock data');
-        startMockPriceUpdates();
-      };
+      // Subscribe to predictions (ghost lines)
+      subscribeToPredictions();
       
-      state.ws.onclose = () => {
-        console.log('WebSocket closed, reconnecting...');
-        setTimeout(connectWebSocket, 3000);
-      };
+      // Load leaderboard
+      await loadLeaderboard();
+      
     } catch (e) {
-      console.log('WebSocket not available, using mock data');
-      startMockPriceUpdates();
+      console.error('Failed to join game:', e);
     }
   }
 
-  function startMockPriceUpdates() {
-    setInterval(() => {
-      const lastPrice = state.currentPrice;
-      const change = (Math.random() - 0.5) * 50;
-      const newPrice = lastPrice + change;
-      handlePriceUpdate(newPrice);
-    }, 500);
+  function subscribeToRound() {
+    if (!state.supabase) return;
+    
+    state.supabase
+      .channel('rounds')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'rounds'
+      }, (payload) => {
+        handleRoundUpdate(payload.new);
+      })
+      .subscribe();
   }
 
-  function handlePriceUpdate(price) {
-    state.currentPrice = price;
+  function subscribeToPredictions() {
+    if (!state.supabase) return;
     
-    const now = Math.floor(Date.now() / 1000);
-    const newPoint = { time: now, value: price };
-    
-    // Add new point, keep last 120 points
-    state.priceData.push(newPoint);
-    if (state.priceData.length > 120) {
-      state.priceData.shift();
-    }
-    
-    state.lineSeries.setData(state.priceData);
-    updatePriceDisplay();
-    
-    // Update prediction accuracy if active
-    if (state.prediction) {
-      updatePredictionAccuracy();
-    }
+    state.supabase
+      .channel('predictions')
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'predictions'
+      }, (payload) => {
+        // Add ghost line for other player's prediction
+        if (payload.new.user_id !== state.userId && payload.new.draw_path) {
+          addGhostPrediction(payload.new);
+        }
+      })
+      .subscribe();
   }
 
-  function updatePriceDisplay() {
-    elements.currentPrice.textContent = formatPrice(state.currentPrice);
+  async function loadLeaderboard() {
+    if (!state.supabase) return;
     
-    const change = ((state.currentPrice - state.startPrice) / state.startPrice) * 100;
-    const changeText = (change >= 0 ? '+' : '') + change.toFixed(2) + '%';
-    elements.priceChange.textContent = changeText;
-    elements.priceChange.className = 'price-change ' + (change >= 0 ? 'positive' : 'negative');
-  }
-
-  // ============================================
-  // Canvas Drawing (Signature-smooth)
-  // ============================================
-  function initCanvas() {
-    const canvas = elements.drawingCanvas;
-    resizeCanvas();
-    
-    // Pointer events for smooth cross-device drawing
-    canvas.addEventListener('pointerdown', handlePointerDown);
-    canvas.addEventListener('pointermove', handlePointerMove);
-    canvas.addEventListener('pointerup', handlePointerUp);
-    canvas.addEventListener('pointerleave', handlePointerUp);
-    canvas.addEventListener('pointercancel', handlePointerUp);
-  }
-
-  function resizeCanvas() {
-    const canvas = elements.drawingCanvas;
-    const container = elements.chartContainer;
-    const dpr = window.devicePixelRatio || 1;
-    
-    canvas.width = container.clientWidth * dpr;
-    canvas.height = container.clientHeight * dpr;
-    canvas.style.width = container.clientWidth + 'px';
-    canvas.style.height = container.clientHeight + 'px';
-    
-    const ctx = canvas.getContext('2d');
-    ctx.scale(dpr, dpr);
-    
-    // Redraw if we have points
-    if (state.drawingPoints.length > 0) {
-      redrawCanvas();
+    try {
+      const { data, error } = await state.supabase.rpc('get_leaderboard', { p_limit: 10 });
+      if (error) throw error;
+      state.leaderboard = data || [];
+      renderLeaderboard();
+    } catch (e) {
+      console.error('Failed to load leaderboard:', e);
     }
   }
 
-  function handlePointerDown(e) {
-    if (!state.isDrawingMode) return;
+  async function submitPrediction() {
+    if (!state.targetPrice) return;
     
-    e.preventDefault();
-    state.isDrawing = true;
-    
-    const point = getCanvasPoint(e);
-    state.drawingPoints = [point];
-    
-    drawPoint(point);
-  }
-
-  function handlePointerMove(e) {
-    if (!state.isDrawing) return;
-    
-    e.preventDefault();
-    const point = getCanvasPoint(e);
-    
-    // Only add point if moved enough (smoothing)
-    const lastPoint = state.drawingPoints[state.drawingPoints.length - 1];
-    const dist = Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y);
-    
-    if (dist > 2) {
-      state.drawingPoints.push(point);
-      redrawCanvas();
-    }
-  }
-
-  function handlePointerUp(e) {
-    if (!state.isDrawing) return;
-    
-    e.preventDefault();
-    state.isDrawing = false;
-    
-    // Smooth the line with cardinal spline
-    if (state.drawingPoints.length > 2) {
-      state.drawingPoints = smoothLine(state.drawingPoints);
-      redrawCanvas();
-    }
-  }
-
-  function getCanvasPoint(e) {
-    const canvas = elements.drawingCanvas;
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top
-    };
-  }
-
-  function drawPoint(point) {
-    const canvas = elements.drawingCanvas;
-    const ctx = canvas.getContext('2d');
-    
-    ctx.fillStyle = '#7cb342';
-    ctx.beginPath();
-    ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  function redrawCanvas() {
-    const canvas = elements.drawingCanvas;
-    const ctx = canvas.getContext('2d');
-    const dpr = window.devicePixelRatio || 1;
-    
-    // Clear
-    ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
-    
-    if (state.drawingPoints.length < 2) {
-      if (state.drawingPoints.length === 1) {
-        drawPoint(state.drawingPoints[0]);
-      }
-      return;
-    }
-    
-    // Draw the prediction zone (right third of chart)
-    const zoneStart = (canvas.width / dpr) * 0.65;
-    ctx.fillStyle = 'rgba(124, 179, 66, 0.08)';
-    ctx.fillRect(zoneStart, 0, (canvas.width / dpr) - zoneStart, canvas.height / dpr);
-    
-    // Draw vertical line at prediction start
-    ctx.strokeStyle = 'rgba(124, 179, 66, 0.3)';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([5, 5]);
-    ctx.beginPath();
-    ctx.moveTo(zoneStart, 0);
-    ctx.lineTo(zoneStart, canvas.height / dpr);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    
-    // Draw smooth prediction line
-    ctx.strokeStyle = '#7cb342';
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    
-    ctx.beginPath();
-    ctx.moveTo(state.drawingPoints[0].x, state.drawingPoints[0].y);
-    
-    for (let i = 1; i < state.drawingPoints.length; i++) {
-      const p = state.drawingPoints[i];
-      ctx.lineTo(p.x, p.y);
-    }
-    
-    ctx.stroke();
-    
-    // Draw glow effect
-    ctx.strokeStyle = 'rgba(124, 179, 66, 0.3)';
-    ctx.lineWidth = 8;
-    ctx.beginPath();
-    ctx.moveTo(state.drawingPoints[0].x, state.drawingPoints[0].y);
-    for (let i = 1; i < state.drawingPoints.length; i++) {
-      ctx.lineTo(state.drawingPoints[i].x, state.drawingPoints[i].y);
-    }
-    ctx.stroke();
-    
-    // Draw endpoint
-    const lastPoint = state.drawingPoints[state.drawingPoints.length - 1];
-    ctx.fillStyle = '#7cb342';
-    ctx.beginPath();
-    ctx.arc(lastPoint.x, lastPoint.y, 6, 0, Math.PI * 2);
-    ctx.fill();
-    
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.arc(lastPoint.x, lastPoint.y, 3, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Cardinal spline smoothing
-  function smoothLine(points, tension = 0.5, numSegments = 16) {
-    if (points.length < 3) return points;
-    
-    const result = [];
-    
-    for (let i = 0; i < points.length - 1; i++) {
-      const p0 = points[Math.max(0, i - 1)];
-      const p1 = points[i];
-      const p2 = points[Math.min(points.length - 1, i + 1)];
-      const p3 = points[Math.min(points.length - 1, i + 2)];
-      
-      for (let t = 0; t < numSegments; t++) {
-        const s = t / numSegments;
+    if (isMultiplayer && state.supabase && state.currentRound) {
+      try {
+        // Normalize draw path for storage
+        const normalizedPath = state.drawPath.map(p => ({
+          x: p.x / DOM.canvas.width,
+          y: p.y / DOM.canvas.height
+        }));
         
-        const x = catmullRom(p0.x, p1.x, p2.x, p3.x, s, tension);
-        const y = catmullRom(p0.y, p1.y, p2.y, p3.y, s, tension);
+        const { data, error } = await state.supabase.rpc('submit_prediction', {
+          p_session_token: state.sessionToken,
+          p_round_id: state.currentRound.id,
+          p_target_price: state.targetPrice,
+          p_draw_path: normalizedPath
+        });
         
-        result.push({ x, y });
+        if (error) throw error;
+        
+        if (data?.[0]?.success) {
+          state.myPrediction = {
+            target_price: state.targetPrice,
+            draw_path: state.drawPath
+          };
+          setMode('submitted');
+        } else {
+          console.error('Submission failed:', data?.[0]?.message);
+        }
+      } catch (e) {
+        console.error('Failed to submit prediction:', e);
       }
+    } else {
+      // Local mode
+      state.myPrediction = {
+        target_price: state.targetPrice,
+        draw_path: [...state.drawPath]
+      };
+      setMode('submitted');
+    }
+  }
+
+  // ============================================
+  // ROUND MANAGEMENT
+  // ============================================
+  function startRoundSync() {
+    // Poll for round updates every second
+    setInterval(async () => {
+      if (!state.supabase) return;
+      
+      try {
+        // Call edge function to manage round lifecycle
+        await fetch(`${CONFIG.SUPABASE_URL}/functions/v1/manage-round`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${CONFIG.SUPABASE_ANON_KEY}`
+          },
+          body: JSON.stringify({ action: 'check_rounds' })
+        });
+        
+        // Get current round
+        const { data } = await state.supabase.rpc('get_current_round');
+        if (data?.[0]) {
+          handleRoundUpdate(data[0]);
+        }
+      } catch (e) {
+        console.error('Round sync error:', e);
+      }
+    }, 1000);
+  }
+
+  function handleRoundUpdate(round) {
+    if (!round) return;
+    
+    const prevRound = state.currentRound;
+    state.currentRound = round;
+    state.playerCount = round.player_count || 0;
+    
+    // Update UI
+    if (DOM.roundNumber) DOM.roundNumber.textContent = `#${round.id}`;
+    if (DOM.playerCount) DOM.playerCount.textContent = `${state.playerCount} players`;
+    
+    // Handle status changes
+    if (round.status === 'active' && state.mode === 'idle') {
+      setMode('drawing');
+      state.ghostPredictions = [];
     }
     
-    result.push(points[points.length - 1]);
-    return result;
-  }
-
-  function catmullRom(p0, p1, p2, p3, t, tension) {
-    const t2 = t * t;
-    const t3 = t2 * t;
-    
-    const m0 = (p2 - p0) * tension;
-    const m1 = (p3 - p1) * tension;
-    
-    return (2 * t3 - 3 * t2 + 1) * p1 +
-           (t3 - 2 * t2 + t) * m0 +
-           (-2 * t3 + 3 * t2) * p2 +
-           (t3 - t2) * m1;
-  }
-
-  // ============================================
-  // Drawing Mode
-  // ============================================
-  function enterDrawingMode() {
-    if (state.prediction) {
-      // Already have an active prediction
-      return;
-    }
-    
-    state.isDrawingMode = true;
-    state.drawingPoints = [];
-    
-    elements.drawingCanvas.classList.add('active');
-    elements.drawingControls.classList.remove('hidden');
-    elements.predictBtn.classList.add('hidden');
-    
-    // Show prediction zone on canvas
-    redrawCanvas();
-  }
-
-  function exitDrawingMode() {
-    state.isDrawingMode = false;
-    state.isDrawing = false;
-    
-    elements.drawingCanvas.classList.remove('active');
-    elements.drawingControls.classList.add('hidden');
-    elements.predictBtn.classList.remove('hidden');
-  }
-
-  function clearDrawing() {
-    state.drawingPoints = [];
-    const canvas = elements.drawingCanvas;
-    const ctx = canvas.getContext('2d');
-    const dpr = window.devicePixelRatio || 1;
-    ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
-    redrawCanvas();
-  }
-
-  // ============================================
-  // Prediction Submission & Scoring
-  // ============================================
-  function submitPrediction() {
-    if (state.drawingPoints.length < 10) {
-      // Need more points for a valid prediction
-      alert('Draw a longer prediction line!');
-      return;
-    }
-    
-    // Convert canvas points to price predictions
-    const canvas = elements.drawingCanvas;
-    const dpr = window.devicePixelRatio || 1;
-    const canvasHeight = canvas.height / dpr;
-    
-    // Get price range from chart
-    const priceRange = getPriceRange();
-    
-    // Convert Y coordinates to prices
-    state.prediction = {
-      startTime: Date.now(),
-      points: state.drawingPoints.map(p => ({
-        // Normalize X to 0-1 representing prediction timeline
-        t: p.x / (canvas.width / dpr),
-        // Convert Y to price (inverted because canvas Y is top-down)
-        price: priceRange.max - (p.y / canvasHeight) * (priceRange.max - priceRange.min)
-      })),
-      accuracy: 100
-    };
-    
-    state.predictionStartTime = Date.now();
-    
-    // Show active prediction banner
-    elements.activePrediction.classList.remove('hidden');
-    
-    // Start countdown
-    startPredictionCountdown();
-    
-    // Exit drawing mode but keep line visible
-    state.isDrawingMode = false;
-    elements.drawingCanvas.classList.remove('active');
-    elements.drawingControls.classList.add('hidden');
-    elements.predictBtn.classList.add('hidden');
-    
-    // Add user to leaderboard
-    addUserToLeaderboard();
-  }
-
-  function getPriceRange() {
-    const prices = state.priceData.map(d => d.value);
-    const min = Math.min(...prices);
-    const max = Math.max(...prices);
-    const padding = (max - min) * 0.1;
-    return { min: min - padding, max: max + padding };
-  }
-
-  function startPredictionCountdown() {
-    const updateCountdown = () => {
-      if (!state.prediction) return;
-      
-      const elapsed = Date.now() - state.predictionStartTime;
-      const remaining = Math.max(0, state.predictionDuration - elapsed);
-      const seconds = Math.ceil(remaining / 1000);
-      
-      elements.predictionCountdown.textContent = seconds + 's';
-      
-      if (remaining > 0) {
-        requestAnimationFrame(updateCountdown);
+    if (round.status === 'locked' && state.mode === 'drawing') {
+      // Force submit or cancel
+      if (state.targetPrice) {
+        submitPrediction();
       } else {
-        finalizePrediction();
-      }
-    };
-    
-    requestAnimationFrame(updateCountdown);
-  }
-
-  function updatePredictionAccuracy() {
-    if (!state.prediction) return;
-    
-    const elapsed = Date.now() - state.predictionStartTime;
-    const progress = Math.min(1, elapsed / state.predictionDuration);
-    
-    // Get the predicted price at current progress
-    const predictedPrice = interpolatePrediction(progress);
-    
-    // Calculate accuracy (inverse of error percentage)
-    const error = Math.abs(state.currentPrice - predictedPrice) / state.currentPrice;
-    const accuracy = Math.max(0, (1 - error * 10) * 100); // Scale error
-    
-    state.prediction.accuracy = accuracy;
-    elements.predictionAccuracy.textContent = accuracy.toFixed(1) + '%';
-    
-    // Update in leaderboard
-    updateUserInLeaderboard(accuracy);
-  }
-
-  function interpolatePrediction(progress) {
-    if (!state.prediction || state.prediction.points.length === 0) {
-      return state.currentPrice;
-    }
-    
-    const points = state.prediction.points;
-    
-    // Find the two points to interpolate between
-    for (let i = 0; i < points.length - 1; i++) {
-      if (points[i + 1].t >= progress) {
-        const t = (progress - points[i].t) / (points[i + 1].t - points[i].t);
-        return points[i].price + t * (points[i + 1].price - points[i].price);
+        setMode('submitted');
       }
     }
     
-    return points[points.length - 1].price;
+    if (round.status === 'completed' && prevRound?.status !== 'completed') {
+      showResults(round);
+    }
+    
+    // Update round end time
+    if (round.end_time) {
+      state.roundEndTime = new Date(round.end_time).getTime();
+    }
   }
 
-  function finalizePrediction() {
-    // Prediction period ended
-    const finalAccuracy = state.prediction.accuracy;
+  async function showResults(round) {
+    setMode('results');
     
-    // Clear prediction
-    state.prediction = null;
-    state.predictionStartTime = null;
+    if (isMultiplayer && state.supabase) {
+      try {
+        const response = await fetch(`${CONFIG.SUPABASE_URL}/functions/v1/manage-round`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${CONFIG.SUPABASE_ANON_KEY}`
+          },
+          body: JSON.stringify({ action: 'get_results', round_id: round.id })
+        });
+        
+        const { predictions } = await response.json();
+        state.roundResults = predictions || [];
+        renderResults();
+        
+        // Refresh leaderboard
+        await loadLeaderboard();
+        
+      } catch (e) {
+        console.error('Failed to get results:', e);
+      }
+    } else {
+      // Local mode results
+      calculateLocalResults();
+    }
     
-    // Hide banner
-    elements.activePrediction.classList.add('hidden');
+    // After 8 seconds, start new round
+    setTimeout(() => {
+      resetForNewRound();
+    }, 8000);
+  }
+
+  function resetForNewRound() {
+    state.targetPrice = null;
+    state.myPrediction = null;
+    state.drawPath = [];
+    state.ghostPredictions = [];
+    state.roundResults = [];
+    
+    setMode('idle');
+    
+    // Reset chart scroll
+    state.chart.timeScale().scrollToRealTime();
+    state.chart.timeScale().applyOptions({ rightOffset: 50 });
     
     // Clear canvas
-    clearDrawing();
+    const ctx = DOM.canvas.getContext('2d');
+    ctx.clearRect(0, 0, DOM.canvas.width, DOM.canvas.height);
+  }
+
+  // Local round for single player
+  function startLocalRound() {
+    const now = Date.now();
+    const roundStart = Math.ceil(now / 60000) * 60000;
     
-    // Show predict button again
-    elements.predictBtn.classList.remove('hidden');
+    state.currentRound = {
+      id: Math.floor(roundStart / 60000),
+      start_time: new Date(roundStart).toISOString(),
+      end_time: new Date(roundStart + 60000).toISOString(),
+      status: 'waiting'
+    };
     
-    // Show result (could make this fancier)
-    setTimeout(() => {
-      alert(`Prediction complete! Final accuracy: ${finalAccuracy.toFixed(1)}%`);
+    state.roundEndTime = roundStart + 60000;
+    
+    // Check round status every second
+    setInterval(() => {
+      const now = Date.now();
+      const roundStart = state.currentRound ? new Date(state.currentRound.start_time).getTime() : 0;
+      const roundEnd = state.roundEndTime || 0;
+      
+      if (now >= roundStart && now < roundEnd - 5000 && state.currentRound.status === 'waiting') {
+        state.currentRound.status = 'active';
+        if (state.mode === 'idle') setMode('drawing');
+      }
+      
+      if (now >= roundEnd - 5000 && now < roundEnd && state.currentRound.status === 'active') {
+        state.currentRound.status = 'locked';
+        if (state.mode === 'drawing' && state.targetPrice) {
+          submitPrediction();
+        }
+      }
+      
+      if (now >= roundEnd && state.currentRound.status !== 'completed') {
+        state.currentRound.status = 'completed';
+        showResults(state.currentRound);
+        
+        // Schedule next round
+        setTimeout(() => {
+          const nextRoundStart = Math.ceil(Date.now() / 60000) * 60000;
+          state.currentRound = {
+            id: Math.floor(nextRoundStart / 60000),
+            start_time: new Date(nextRoundStart).toISOString(),
+            end_time: new Date(nextRoundStart + 60000).toISOString(),
+            status: 'waiting'
+          };
+          state.roundEndTime = nextRoundStart + 60000;
+        }, 8000);
+      }
     }, 100);
   }
 
-  // ============================================
-  // Leaderboard
-  // ============================================
-  function updateLeaderboard() {
-    // Combine mock users with current user if they have a prediction
-    state.leaderboard = [...mockUsers];
+  function calculateLocalResults() {
+    if (!state.myPrediction) {
+      state.roundResults = [];
+      return;
+    }
     
-    // Sort by accuracy
-    state.leaderboard.sort((a, b) => b.accuracy - a.accuracy);
+    const accuracy = Math.max(0, 100 - (Math.abs(state.currentPrice - state.myPrediction.target_price) / state.currentPrice * 1000));
     
-    renderLeaderboard();
+    state.roundResults = [
+      { rank: 1, users: { nickname: localStorage.getItem('predictoor_nickname') || 'You' }, target_price: state.myPrediction.target_price, accuracy }
+    ];
+    
+    renderResults();
   }
 
-  function addUserToLeaderboard() {
-    // Remove existing user entry if present
-    state.leaderboard = state.leaderboard.filter(u => u.id !== 'current-user');
+  // ============================================
+  // GHOST LINES
+  // ============================================
+  function addGhostPrediction(prediction) {
+    if (!prediction.draw_path) return;
     
-    // Add current user
-    state.leaderboard.push({
-      id: 'current-user',
-      name: state.nickname,
-      accuracy: state.prediction.accuracy,
-      isUser: true
+    // Convert normalized path back to canvas coordinates
+    const path = prediction.draw_path.map(p => ({
+      x: p.x * DOM.canvas.width,
+      y: p.y * DOM.canvas.height
+    }));
+    
+    state.ghostPredictions.push({
+      user_id: prediction.user_id,
+      path: path,
+      target_price: prediction.target_price,
+      color: `hsl(${Math.random() * 360}, 50%, 50%)`,
+      opacity: 0.3
     });
     
-    // Sort and render
-    state.leaderboard.sort((a, b) => b.accuracy - a.accuracy);
-    renderLeaderboard();
+    // Update player count
+    state.playerCount = state.ghostPredictions.length + 1;
+    if (DOM.playerCount) DOM.playerCount.textContent = `${state.playerCount} players`;
   }
 
-  function updateUserInLeaderboard(accuracy) {
-    const userEntry = state.leaderboard.find(u => u.id === 'current-user');
-    if (userEntry) {
-      userEntry.accuracy = accuracy;
-      state.leaderboard.sort((a, b) => b.accuracy - a.accuracy);
-      renderLeaderboard();
+  // ============================================
+  // MODE MANAGEMENT
+  // ============================================
+  function setMode(mode) {
+    state.mode = mode;
+    
+    // Hide all panels
+    DOM.waitingMode?.classList.add('hidden');
+    DOM.drawingMode?.classList.add('hidden');
+    DOM.submittedMode?.classList.add('hidden');
+    DOM.resultsMode?.classList.add('hidden');
+    
+    // Show appropriate panel
+    switch (mode) {
+      case 'idle':
+        DOM.waitingMode?.classList.remove('hidden');
+        DOM.canvas.classList.remove('active');
+        break;
+      case 'drawing':
+        DOM.drawingMode?.classList.remove('hidden');
+        DOM.canvas.classList.add('active');
+        DOM.targetPrice.textContent = 'Draw on chart';
+        DOM.targetPrice.classList.add('empty');
+        DOM.targetDiff.textContent = '';
+        break;
+      case 'submitted':
+        DOM.submittedMode?.classList.remove('hidden');
+        DOM.canvas.classList.remove('active');
+        break;
+      case 'results':
+        DOM.resultsMode?.classList.remove('hidden');
+        DOM.canvas.classList.remove('active');
+        break;
+    }
+  }
+
+  // ============================================
+  // CHART
+  // ============================================
+  function initChart() {
+    state.chart = LightweightCharts.createChart(DOM.chartContainer, {
+      width: DOM.chartContainer.clientWidth,
+      height: DOM.chartContainer.clientHeight,
+      layout: {
+        background: { color: '#111114' },
+        textColor: '#606068',
+        fontFamily: "'JetBrains Mono', monospace",
+      },
+      grid: {
+        vertLines: { visible: false },
+        horzLines: { color: 'rgba(255, 255, 255, 0.04)' },
+      },
+      timeScale: {
+        borderVisible: false,
+        timeVisible: true,
+        secondsVisible: true,
+        rightOffset: 50,
+        barSpacing: 8,
+        shiftVisibleRangeOnNewBar: true,
+      },
+      rightPriceScale: {
+        borderVisible: false,
+        scaleMargins: { top: 0.15, bottom: 0.15 },
+      },
+      crosshair: {
+        mode: LightweightCharts.CrosshairMode.Normal,
+        vertLine: { color: 'rgba(247, 147, 26, 0.3)', labelBackgroundColor: '#f7931a' },
+        horzLine: { color: 'rgba(247, 147, 26, 0.3)', labelBackgroundColor: '#f7931a' },
+      },
+    });
+
+    state.series = state.chart.addLineSeries({
+      color: '#f7931a',
+      lineWidth: 2,
+      priceLineVisible: true,
+      priceLineColor: 'rgba(247, 147, 26, 0.5)',
+      lastValueVisible: true,
+    });
+
+    new ResizeObserver(() => {
+      state.chart.applyOptions({
+        width: DOM.chartContainer.clientWidth,
+        height: DOM.chartContainer.clientHeight,
+      });
+      resizeCanvas();
+    }).observe(DOM.chartContainer);
+  }
+
+  async function loadHistoricalData() {
+    try {
+      const response = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=60');
+      const klines = await response.json();
+      
+      const data = [];
+      for (const k of klines) {
+        data.push({ time: Math.floor(k[0] / 1000), value: parseFloat(k[4]) });
+      }
+      
+      state.series.setData(data);
+      state.currentPrice = data[data.length - 1].value;
+      state.displayPrice = state.currentPrice;
+      state.startPrice = data[0].value;
+      state.lastTime = data[data.length - 1].time;
+      
+      updateTicker();
+      state.chart.timeScale().scrollToRealTime();
+    } catch (e) {
+      console.error('Failed to load data:', e);
+    }
+  }
+
+  function connectPriceFeed() {
+    state.ws = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@aggTrade');
+    
+    let lastUpdate = 0;
+    state.ws.onmessage = (event) => {
+      const now = Date.now();
+      if (now - lastUpdate < 100) return;
+      lastUpdate = now;
+      
+      const data = JSON.parse(event.data);
+      state.previousPrice = state.currentPrice;
+      state.currentPrice = parseFloat(data.p);
+      
+      if (state.startPrice === 0) {
+        state.startPrice = state.currentPrice;
+        state.displayPrice = state.currentPrice;
+      }
+      
+      animatePriceChange();
+    };
+    
+    state.ws.onclose = () => setTimeout(connectPriceFeed, 2000);
+  }
+
+  function animatePriceChange() {
+    if (!DOM.tickerPrice) return;
+    
+    const dir = state.currentPrice > state.previousPrice ? 'up' : 
+                state.currentPrice < state.previousPrice ? 'down' : 'neutral';
+    
+    DOM.tickerPrice.classList.remove('pulse-up', 'pulse-down');
+    void DOM.tickerPrice.offsetWidth;
+    DOM.tickerPrice.classList.add(`pulse-${dir}`);
+    
+    if (DOM.tickerArrow) {
+      DOM.tickerArrow.textContent = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '';
+      DOM.tickerArrow.className = `ticker-arrow ${dir}`;
+    }
+  }
+
+  // ============================================
+  // ANIMATION LOOP
+  // ============================================
+  function startAnimationLoop() {
+    let lastChartUpdate = 0;
+    
+    function animate(timestamp) {
+      // Lerp price
+      state.displayPrice += (state.currentPrice - state.displayPrice) * 0.12;
+      updateTicker();
+      
+      // Update chart
+      if (timestamp - lastChartUpdate >= 500 && state.currentPrice > 0) {
+        lastChartUpdate = timestamp;
+        const now = Math.floor(Date.now() / 1000);
+        if (now > state.lastTime) {
+          state.series.update({ time: now, value: state.displayPrice });
+          state.lastTime = now;
+        } else {
+          state.series.update({ time: state.lastTime, value: state.displayPrice });
+        }
+      }
+      
+      // Update round timer
+      updateRoundTimer();
+      
+      // Redraw canvas
+      if (state.mode === 'drawing' || state.mode === 'submitted') {
+        redrawCanvas();
+      }
+      
+      requestAnimationFrame(animate);
+    }
+    
+    requestAnimationFrame(animate);
+  }
+
+  function updateTicker() {
+    if (!DOM.tickerPrice) return;
+    DOM.tickerPrice.textContent = formatPrice(state.displayPrice);
+    
+    if (state.startPrice > 0) {
+      const change = ((state.displayPrice - state.startPrice) / state.startPrice) * 100;
+      DOM.tickerChange.textContent = (change >= 0 ? '+' : '') + change.toFixed(2) + '%';
+      DOM.tickerChange.className = 'ticker-change ' + (change >= 0 ? 'up' : 'down');
+    }
+  }
+
+  function updateRoundTimer() {
+    if (!DOM.roundTimer || !state.roundEndTime) return;
+    
+    const remaining = Math.max(0, Math.ceil((state.roundEndTime - Date.now()) / 1000));
+    DOM.roundTimer.textContent = remaining + 's';
+    DOM.roundTimer.classList.toggle('ending', remaining <= 5);
+  }
+
+  // ============================================
+  // CANVAS
+  // ============================================
+  function initCanvas() {
+    resizeCanvas();
+    DOM.canvas.addEventListener('pointerdown', onPointerDown);
+    DOM.canvas.addEventListener('pointermove', onPointerMove);
+    DOM.canvas.addEventListener('pointerup', onPointerUp);
+    DOM.canvas.addEventListener('pointerleave', onPointerUp);
+  }
+
+  function resizeCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    DOM.canvas.width = DOM.chartContainer.clientWidth * dpr;
+    DOM.canvas.height = DOM.chartContainer.clientHeight * dpr;
+    DOM.canvas.style.width = DOM.chartContainer.clientWidth + 'px';
+    DOM.canvas.style.height = DOM.chartContainer.clientHeight + 'px';
+  }
+
+  function getCoord(e) {
+    const rect = DOM.canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    return { x: (e.clientX - rect.left) * dpr, y: (e.clientY - rect.top) * dpr };
+  }
+
+  function getAnchor() {
+    const now = state.lastTime || Math.floor(Date.now() / 1000);
+    const x = state.chart.timeScale().timeToCoordinate(now);
+    const y = state.series.priceToCoordinate(state.displayPrice);
+    if (x === null || y === null) return null;
+    const dpr = window.devicePixelRatio || 1;
+    return { x: x * dpr, y: y * dpr };
+  }
+
+  function onPointerDown(e) {
+    if (state.mode !== 'drawing') return;
+    e.preventDefault();
+    state.isDrawing = true;
+    state.drawPath = [getCoord(e)];
+  }
+
+  function onPointerMove(e) {
+    if (state.mode !== 'drawing' || !state.isDrawing) return;
+    e.preventDefault();
+    state.drawPath.push(getCoord(e));
+    updateTargetFromDrawing();
+  }
+
+  function onPointerUp() {
+    state.isDrawing = false;
+  }
+
+  function updateTargetFromDrawing() {
+    if (state.drawPath.length === 0) return;
+    const end = state.drawPath[state.drawPath.length - 1];
+    const dpr = window.devicePixelRatio || 1;
+    const price = state.series.coordinateToPrice(end.y / dpr);
+    
+    if (price && price > 0) {
+      state.targetPrice = price;
+      DOM.targetPrice.textContent = formatPrice(price);
+      DOM.targetPrice.classList.remove('empty');
+      
+      const diff = price - state.currentPrice;
+      const pct = (diff / state.currentPrice) * 100;
+      DOM.targetDiff.textContent = `${diff >= 0 ? '+' : ''}${formatPrice(diff)} (${diff >= 0 ? '+' : ''}${pct.toFixed(2)}%)`;
+      DOM.targetDiff.className = 'target-diff ' + (diff >= 0 ? 'up' : 'down');
+    }
+  }
+
+  function redrawCanvas() {
+    const ctx = DOM.canvas.getContext('2d');
+    const w = DOM.canvas.width;
+    const h = DOM.canvas.height;
+    const dpr = window.devicePixelRatio || 1;
+    
+    ctx.clearRect(0, 0, w, h);
+    
+    const anchor = getAnchor();
+    if (!anchor) return;
+    
+    // Draw ghost lines first (behind user's line)
+    for (const ghost of state.ghostPredictions) {
+      if (ghost.path.length > 1) {
+        ctx.beginPath();
+        ctx.strokeStyle = `rgba(150, 150, 150, ${ghost.opacity})`;
+        ctx.lineWidth = 2 * dpr;
+        ctx.lineCap = 'round';
+        ctx.moveTo(ghost.path[0].x, ghost.path[0].y);
+        for (let i = 1; i < ghost.path.length; i++) {
+          ctx.lineTo(ghost.path[i].x, ghost.path[i].y);
+        }
+        ctx.stroke();
+      }
+    }
+    
+    // Anchor
+    if (state.mode === 'drawing') {
+      const pulse = Math.sin(Date.now() / 200) * 0.3 + 0.7;
+      ctx.beginPath();
+      ctx.fillStyle = `rgba(247, 147, 26, ${0.2 * pulse})`;
+      ctx.arc(anchor.x, anchor.y, 25 * dpr, 0, Math.PI * 2);
+      ctx.fill();
+      
+      ctx.beginPath();
+      ctx.fillStyle = '#f7931a';
+      ctx.arc(anchor.x, anchor.y, 5 * dpr, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    
+    // User's line
+    if (state.drawPath.length > 0) {
+      // Leash
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(247, 147, 26, 0.4)';
+      ctx.lineWidth = 2 * dpr;
+      ctx.setLineDash([6 * dpr, 6 * dpr]);
+      ctx.moveTo(anchor.x, anchor.y);
+      ctx.lineTo(state.drawPath[0].x, state.drawPath[0].y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      
+      if (state.drawPath.length > 1) {
+        // Glow
+        ctx.beginPath();
+        ctx.strokeStyle = 'rgba(0, 210, 106, 0.2)';
+        ctx.lineWidth = 14 * dpr;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.moveTo(state.drawPath[0].x, state.drawPath[0].y);
+        for (let i = 1; i < state.drawPath.length; i++) {
+          ctx.lineTo(state.drawPath[i].x, state.drawPath[i].y);
+        }
+        ctx.stroke();
+        
+        // Main line
+        ctx.beginPath();
+        ctx.strokeStyle = '#00d26a';
+        ctx.lineWidth = 3 * dpr;
+        ctx.moveTo(state.drawPath[0].x, state.drawPath[0].y);
+        for (let i = 1; i < state.drawPath.length; i++) {
+          ctx.lineTo(state.drawPath[i].x, state.drawPath[i].y);
+        }
+        ctx.stroke();
+        
+        // End dot
+        const end = state.drawPath[state.drawPath.length - 1];
+        ctx.beginPath();
+        ctx.fillStyle = '#00d26a';
+        ctx.arc(end.x, end.y, 6 * dpr, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    
+    // Ghost count indicator
+    if (state.ghostPredictions.length > 0) {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+      ctx.font = `${12 * dpr}px JetBrains Mono`;
+      ctx.fillText(`${state.ghostPredictions.length} other predictions`, 10 * dpr, 20 * dpr);
+    }
+  }
+
+  // ============================================
+  // RENDERING
+  // ============================================
+  function renderResults() {
+    if (!DOM.resultsList) return;
+    
+    DOM.resultsList.innerHTML = state.roundResults.slice(0, 5).map((p, i) => `
+      <div class="result-item ${p.user_id === state.userId ? 'is-you' : ''}">
+        <span class="result-rank">${p.rank || i + 1}</span>
+        <span class="result-name">${p.users?.nickname || 'Player'}</span>
+        <span class="result-target">${formatPrice(p.target_price)}</span>
+        <span class="result-accuracy">${p.accuracy?.toFixed(1) || '0.0'}%</span>
+      </div>
+    `).join('');
+    
+    // Show user's result
+    const myResult = state.roundResults.find(p => p.user_id === state.userId);
+    if (myResult && DOM.myResult) {
+      DOM.myResult.innerHTML = `
+        <div class="my-result-rank">#${myResult.rank || '?'}</div>
+        <div class="my-result-accuracy">${myResult.accuracy?.toFixed(1) || '0.0'}%</div>
+      `;
     }
   }
 
   function renderLeaderboard() {
-    const container = elements.leaderboard;
-    container.innerHTML = '';
+    if (!DOM.leaderboard) return;
     
-    state.leaderboard.slice(0, 10).forEach((user, index) => {
-      const rank = index + 1;
-      const item = document.createElement('div');
-      item.className = 'leaderboard-item' + (user.isUser ? ' is-you' : '');
-      
-      const rankClass = rank === 1 ? 'gold' : rank === 2 ? 'silver' : rank === 3 ? 'bronze' : 'normal';
-      const accuracyClass = user.accuracy >= 90 ? 'excellent' : user.accuracy >= 70 ? 'good' : 'poor';
-      
-      item.innerHTML = `
-        <div class="rank ${rankClass}">${rank}</div>
-        <div class="leaderboard-avatar">${user.name.charAt(0).toUpperCase()}</div>
-        <div class="leaderboard-info">
-          <div class="leaderboard-name">${user.name}${user.isUser ? ' (You)' : ''}</div>
-          <div class="leaderboard-status">${user.isUser ? 'Active prediction' : 'Last prediction'}</div>
+    DOM.leaderboard.innerHTML = state.leaderboard.map((u, i) => `
+      <div class="leaderboard-item ${u.user_id === state.userId ? 'is-you' : ''}">
+        <span class="lb-rank ${i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : ''}">${i + 1}</span>
+        <div class="lb-avatar">${u.nickname?.[0] || '?'}</div>
+        <div class="lb-info">
+          <div class="lb-name">${u.nickname || 'Player'}</div>
+          <div class="lb-predictions">${u.total_predictions} predictions</div>
         </div>
-        <div class="leaderboard-accuracy ${accuracyClass}">${user.accuracy.toFixed(1)}%</div>
-      `;
-      
-      container.appendChild(item);
+        <span class="lb-accuracy">${u.avg_accuracy?.toFixed(1) || '0.0'}%</span>
+      </div>
+    `).join('');
+  }
+
+  function initMockLeaderboard() {
+    const names = ['CryptoKing', 'SatoshiV', 'MoonLambo', 'WAGMI', 'Diamond', 'ChartPro'];
+    state.leaderboard = names.map((name, i) => ({
+      nickname: name,
+      total_predictions: Math.floor(80 + Math.random() * 200),
+      avg_accuracy: parseFloat((96 - i * 3.5 + Math.random() * 2).toFixed(1)),
+    }));
+    renderLeaderboard();
+  }
+
+  // ============================================
+  // EVENT LISTENERS
+  // ============================================
+  function setupEventListeners() {
+    DOM.btnDraw?.addEventListener('click', () => setMode('drawing'));
+    DOM.btnCancel?.addEventListener('click', () => {
+      state.drawPath = [];
+      state.targetPrice = null;
+      setMode('idle');
     });
-  }
-
-  // Simulate live leaderboard updates
-  function startLeaderboardUpdates() {
-    setInterval(() => {
-      mockUsers.forEach(user => {
-        // Small random fluctuation
-        user.accuracy = Math.max(50, Math.min(99, user.accuracy + (Math.random() - 0.5) * 2));
-      });
-      
-      if (!state.prediction) {
-        updateLeaderboard();
-      }
-    }, 3000);
+    DOM.btnSubmit?.addEventListener('click', submitPrediction);
   }
 
   // ============================================
-  // Utilities
+  // UTILS
   // ============================================
-  function formatPrice(price) {
-    return '$' + price.toLocaleString('en-US', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
-    });
-  }
-
-  function debounce(func, wait) {
-    let timeout;
-    return function executedFunction(...args) {
-      const later = () => {
-        clearTimeout(timeout);
-        func(...args);
-      };
-      clearTimeout(timeout);
-      timeout = setTimeout(later, wait);
-    };
+  function formatPrice(p) {
+    if (!p || isNaN(p)) return '$--,---.--';
+    return '$' + p.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
   // ============================================
-  // Start the app
+  // START
   // ============================================
-  document.addEventListener('DOMContentLoaded', () => {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
     init();
-    startLeaderboardUpdates();
-  });
-
+  }
 })();
-
