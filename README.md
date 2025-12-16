@@ -23,6 +23,35 @@ The magic isn't in predicting the exact price—it's watching your position clim
 
 ## How It Works
 
+```mermaid
+flowchart LR
+    subgraph Game["🎮 Game Loop"]
+        Join[Join Round]
+        Predict[Make Prediction]
+        Watch[Watch Live]
+        Result[See Winner]
+    end
+    
+    subgraph Data["📈 Live Data"]
+        WS[Binance WebSocket]
+        Chart[TradingView Chart]
+        Rank[Live Leaderboard]
+    end
+    
+    Join --> Predict
+    Predict --> Watch
+    Watch --> Result
+    Result --> Join
+    
+    WS --> Chart
+    WS --> Rank
+    Chart --> Watch
+    Rank --> Watch
+    
+    style Game fill:#0d0d0d,stroke:#22c55e,color:#fff
+    style Data fill:#0d0d0d,stroke:#eab308,color:#fff
+```
+
 1. **Join a round** — Rounds sync to the minute, so everyone predicts the same target time
 2. **Make your prediction** — Enter your price guess and see it plotted on the live chart
 3. **Watch the tension build** — Your rank updates in real-time as the market moves
