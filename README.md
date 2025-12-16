@@ -1,76 +1,62 @@
-# Predictoor 📈
+# Chart Predictoor 📈
 
-A real-time BTC price prediction game. Guess where the price will be when the round ends, compete against other players, climb the live leaderboard.
+**A real-time BTC price prediction game where your rank changes live as the market moves toward or away from your guess.**
 
-**Live Demo:** https://chart-pred.vercel.app
+The magic isn't in predicting the exact price—it's watching your position climb and fall in real-time as each price tick brings you closer to victory or defeat. Make your prediction, then experience the genuine tension of live rank tracking during 60-second rounds.
 
-![Predictoor Screenshot](https://img.shields.io/badge/status-archived-yellow)
+**🎮 [Play Live Demo](https://chart-pred.vercel.app)**
 
----
+![Status](https://img.shields.io/badge/status-archived-yellow)
 
-## The Idea
+## What It Does
 
-What if predicting price movements felt like a game? You see a live BTC chart, type your prediction, and watch your rank change in real-time as the price moves toward or away from your guess. Closest prediction when the round ends wins.
+- **Live price predictions** — Guess where BTC will be when the 60-second round ends
+- **Real-time rank updates** — Watch your leaderboard position change as price moves
+- **Visual feedback** — See your prediction line on the TradingView chart
+- **Instant competition** — Jump in and play immediately, no signup required
+- **Mobile responsive** — Works seamlessly on desktop and mobile
 
-**Core mechanics:**
-- 60-second rounds synced to the minute
-- Real-time Binance price data via WebSocket
-- Live leaderboard that updates as price moves
-- Visual feedback: your prediction line on the chart, rank changes (▲/▼), win streaks
+## How It Works
 
----
+1. **Join a round** — Rounds sync to the minute, so everyone predicts the same target time
+2. **Make your prediction** — Enter your price guess and see it plotted on the live chart
+3. **Watch the tension build** — Your rank updates in real-time as the market moves
+4. **See who wins** — Closest prediction when time expires takes the round
 
 ## Tech Stack
 
-- **Frontend:** Vanilla JS, HTML, CSS (no framework)
-- **Charting:** [Lightweight Charts](https://github.com/nickingh/lightweight-charts) (TradingView's open-source library)
-- **Data:** Binance WebSocket API (`btcusdt@aggTrade`)
-- **Hosting:** Vercel (static)
+- **Frontend:** Vanilla JavaScript (no framework overhead)
+- **Charts:** [Lightweight Charts](https://github.com/tradingview/lightweight-charts) by TradingView
+- **Live Data:** Binance WebSocket API (`btcusdt@aggTrade`)
+- **Deployment:** Vercel static hosting
 
----
-
-## Retrospective
-
-### What worked
-- **The live rank tracking creates genuine tension.** Watching your position change as price ticks toward or away from your prediction is surprisingly engaging.
-- **Low friction entry.** Click, type a number, play. No signup, no wallet connection.
-- **The UX polish paid off.** Smooth chart, clear visual hierarchy, mobile-responsive.
-
-### What didn't work
-- **60-second predictions are pure noise.** There's no skill in guessing where BTC will be in a minute. It's a random number generator with extra steps.
-- **No real stakes = no real engagement.** Without money/points/reputation on the line, winning feels hollow.
-- **Simulated multiplayer is a band-aid.** The 20 "players" are bots. Real multiplayer would need a backend, and then you're building infrastructure for a game mechanic that might not even be fun.
-
-### What would've made it work
-1. **Longer timeframes** — End-of-day predictions where analysis matters
-2. **Real stakes** — Prediction markets with actual money (but then: legal complexity)
-3. **Social mechanics** — Shareable results, friend challenges, persistent leaderboards
-4. **Different core mechanic** — Drawing predictions (the original idea) or binary up/down
-
-### The takeaway
-The interesting part wasn't "guess the exact price" — it was the **live competition visualization**. Seeing where you stand relative to others in real-time, watching that change. That mechanic could work in a different game.
-
----
-
-## Run Locally
+## Quick Start
 
 ```bash
-# Clone
-git clone https://github.com/rohunvora/chart-pred.git
-cd chart-pred
-
-# Serve (any static server works)
-npx serve public
-
-# Or just open public/index.html in a browser
+# Clone and run locally
+git clone https://github.com/yourusername/chart-predictoor
+cd chart-predictoor
+npx serve public -l 3000
 ```
 
----
+Open `http://localhost:3000` and start predicting!
+
+## Project Status: Archived
+
+This was an experiment in real-time game mechanics. The **live rank visualization worked brilliantly**—that moment when you watch your position change as each price tick comes in creates genuine engagement.
+
+However, 60-second BTC predictions are essentially random. The core mechanic (live rank tracking during market movement) has potential for other applications where skill actually matters.
+
+### Key Learnings
+
+✅ **Live rank updates create real tension**  
+✅ **Low-friction entry drives participation**  
+✅ **Visual polish significantly impacts engagement**  
+
+❌ **Ultra-short timeframes eliminate skill**  
+❌ **No stakes = no lasting engagement**  
+❌ **Simulated multiplayer feels hollow**
 
 ## License
 
-MIT — do whatever you want with it.
-
----
-
-*Built in a weekend. Archived with love. gg* 🎮
+MIT - Feel free to fork and experiment with the live ranking mechanics in your own projects.
