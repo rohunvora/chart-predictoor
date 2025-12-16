@@ -1,3 +1,8 @@
+<div align="center">
+  <img src="/.github/social-preview.png" alt="chart-predictoor" width="800" />
+  <p><strong>Real-time BTC price prediction game with live leaderboard that updates as price moves toward/away from your guess.</strong></p>
+</div>
+
 # Chart Predictoor 📈
 
 **A real-time BTC price prediction game where your rank changes live as the market moves toward or away from your guess.**
